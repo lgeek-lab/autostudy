@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>自动学习助手 - 设置</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>⚙️ 自动学习助手设置</h1>
+        <p>自定义您的自动学习体验</p>
+      </div>
+
+      <div class="content">
+        <form id="settingsForm">
+          <div class="setting-group">
+            <label for="scrollSpeed">
+              <span class="label-text">滚动速度（像素/次）</span>
+              <span class="label-desc">每次滚动移动的距离，值越大滚动越快</span>
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="scrollSpeed"
+                name="scrollSpeed"
+                min="50"
+                max="300"
+                step="10"
+              />
+              <input
+                type="number"
+                id="scrollSpeedValue"
+                min="50"
+                max="300"
+                step="10"
+              />
+              <span class="unit">px</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="scrollDelay">
+              <span class="label-text">滚动间隔（毫秒）</span>
+              <span class="label-desc"
+                >两次滚动之间的时间间隔，值越小滚动越流畅</span
+              >
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="scrollDelay"
+                name="scrollDelay"
+                min="100"
+                max="1000"
+                step="50"
+              />
+              <input
+                type="number"
+                id="scrollDelayValue"
+                min="100"
+                max="1000"
+                step="50"
+              />
+              <span class="unit">ms</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="waitAtBottom">
+              <span class="label-text">底部等待时间（秒）</span>
+              <span class="label-desc">到达页面底部后等待多久再点击下一个</span>
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="waitAtBottom"
+                name="waitAtBottom"
+                min="1"
+                max="10"
+                step="1"
+              />
+              <input
+                type="number"
+                id="waitAtBottomValue"
+                min="1"
+                max="10"
+                step="1"
+              />
+              <span class="unit">s</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="maxRetries">
+              <span class="label-text">最大重试次数</span>
+              <span class="label-desc">查找"下一个"按钮失败时的重试次数</span>
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="maxRetries"
+                name="maxRetries"
+                min="1"
+                max="10"
+                step="1"
+              />
+              <input
+                type="number"
+                id="maxRetriesValue"
+                min="1"
+                max="10"
+                step="1"
+              />
+              <span class="unit">次</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="pageLoadWait">
+              <span class="label-text">页面加载等待（秒）</span>
+              <span class="label-desc"
+                >点击下一个按钮后等待新页面加载的时间</span
+              >
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="pageLoadWait"
+                name="pageLoadWait"
+                min="2"
+                max="10"
+                step="1"
+              />
+              <input
+                type="number"
+                id="pageLoadWaitValue"
+                min="2"
+                max="10"
+                step="1"
+              />
+              <span class="unit">s</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="videoSpeed">
+              <span class="label-text">视频播放倍速</span>
+              <span class="label-desc">自动调整视频播放速度</span>
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="videoSpeed"
+                name="videoSpeed"
+                min="1"
+                max="3"
+                step="0.25"
+              />
+              <input
+                type="number"
+                id="videoSpeedValue"
+                min="1"
+                max="3"
+                step="0.25"
+              />
+              <span class="unit">x</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="notificationInterval">
+              <span class="label-text">通知间隔（秒）</span>
+              <span class="label-desc"
+                >通知显示的最小间隔时间，避免过于频繁</span
+              >
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="notificationInterval"
+                name="notificationInterval"
+                min="1"
+                max="30"
+                step="1"
+              />
+              <input
+                type="number"
+                id="notificationIntervalValue"
+                min="1"
+                max="30"
+                step="1"
+              />
+              <span class="unit">s</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="autoClickNext" name="autoClickNext" />
+              <span class="label-text">自动点击下一个</span>
+              <span class="label-desc"
+                >到达底部后自动查找并点击"下一个"按钮</span
+              >
+            </label>
+          </div>
+
+          <div class="setting-group">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                id="autoHandleFileList"
+                name="autoHandleFileList"
+              />
+              <span class="label-text">自动处理文件列表</span>
+              <span class="label-desc"
+                >检测到文件列表页面时，自动逐个查看文件</span
+              >
+            </label>
+          </div>
+
+          <div class="setting-group">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                id="showNotifications"
+                name="showNotifications"
+              />
+              <span class="label-text">显示通知</span>
+              <span class="label-desc"
+                >是否显示运行状态通知（重要通知始终显示）</span
+              >
+            </label>
+          </div>
+
+          <div class="button-group">
+            <button type="submit" class="btn btn-primary">保存设置</button>
+            <button type="button" id="resetBtn" class="btn btn-secondary">
+              恢复默认
+            </button>
+          </div>
+
+          <div id="message" class="message"></div>
+        </form>
+
+        <div class="info-box">
+          <h3>💡 使用提示</h3>
+          <ul>
+            <li>建议滚动速度设置为 100-150px，间隔设置为 200-300ms</li>
+            <li>较慢的滚动速度可以让您有更多时间浏览内容</li>
+            <li>底部等待时间建议设置 3-5 秒，确保页面内容完全加载</li>
+            <li>最大重试次数：网络较慢时可增加到 8-10 次</li>
+            <li>页面加载等待：网络较慢时建议设置 6-8 秒</li>
+            <li><strong>🎥 视频处理：</strong>自动检测视频，静音并调整倍速</li>
+            <li>
+              <strong>🔔 通知控制：</strong
+              >调整通知间隔避免过于频繁，建议设置5-10秒
+            </li>
+            <li>
+              <strong>📁 文件列表：</strong>自动检测文件列表，逐个查看文件并关闭
+            </li>
+            <li>
+              <strong>📄 页面识别：</strong>自动区分文本、视频、文件列表页面类型
+            </li>
+            <li>支持快捷键：Ctrl/Cmd + Shift + S 切换运行状态</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
