@@ -1523,37 +1523,83 @@ function autoScroll() {
       }
       
       try {
-        // 简化的滚动逻辑 - 优先检测PDF容器
-        const pdfContainer = document.querySelector('#viewerContainer') ||
-                           document.querySelector('#viewer') ||
-                           document.querySelector('.pdfViewer');
+        // 智能PDF容器检测 - 优先主要内容区域
+        const pdfContainerCandidates = [
+          document.querySelector('#viewerContainer'),
+          document.querySelector('#viewer'),
+          document.querySelector('.pdfViewer'),
+          document.querySelector('#outerContainer'),
+          document.querySelector('.pdf-container')
+        ].filter(Boolean);
         
         let scrollExecuted = false;
+        let validPdfContainer = null;
         
-        if (pdfContainer && pdfContainer.scrollHeight > pdfContainer.clientHeight + 10) {
-          // 找到PDF容器，直接滚动
-          console.log('📄 [AutoStudy] 使用PDF容器滚动:', {
-            容器ID: pdfContainer.id || '无',
-            容器类: pdfContainer.className,
-            滚动前: pdfContainer.scrollTop,
-            总高度: pdfContainer.scrollHeight,
-            可见高度: pdfContainer.clientHeight
+        // 检测有效的PDF容器，排除侧边栏
+        for (let container of pdfContainerCandidates) {
+          if (!container) continue;
+          
+          try {
+            const isScrollable = container.scrollHeight > container.clientHeight + 10;
+            const isMainContent = !isSidebarOrNavigation(container);
+            const rect = container.getBoundingClientRect();
+            const isVisible = rect.width > 0 && rect.height > 0;
+            
+            console.log(`📄 [AutoStudy] 检测PDF容器 ${container.id || container.className}:`, {
+              是否可滚动: isScrollable,
+              是否主要内容: isMainContent,
+              是否可见: isVisible,
+              位置: rect.left < window.innerWidth * 0.3 ? '左侧' : '右侧',
+              宽度: Math.round(rect.width),
+              高度: Math.round(rect.height)
+            });
+            
+            if (isScrollable && isMainContent && isVisible) {
+              validPdfContainer = container;
+              break;
+            }
+          } catch (error) {
+            console.warn('⚠️ [AutoStudy] 检测PDF容器时出错:', error.message);
+          }
+        }
+        
+        if (validPdfContainer) {
+          console.log('✅ [AutoStudy] 找到有效PDF主要内容容器，开始滚动:', {
+            容器ID: validPdfContainer.id || '无',
+            容器类: validPdfContainer.className || '无',
+            滚动前位置: validPdfContainer.scrollTop,
+            总高度: validPdfContainer.scrollHeight,
+            可见高度: validPdfContainer.clientHeight,
+            位置信息: getElementPosition(validPdfContainer)
           });
           
-          const beforeScroll = pdfContainer.scrollTop;
-          pdfContainer.scrollBy(0, scrollAmount);
+          const beforeScroll = validPdfContainer.scrollTop;
+          
+          try {
+            validPdfContainer.scrollBy(0, scrollAmount);
+            console.log('📄 [AutoStudy] 使用scrollBy方法滚动PDF容器');
+          } catch (scrollByError) {
+            console.warn('⚠️ [AutoStudy] scrollBy失败，尝试直接设置scrollTop');
+            validPdfContainer.scrollTop = beforeScroll + scrollAmount;
+          }
           
           setTimeout(() => {
-            const afterScroll = pdfContainer.scrollTop;
+            const afterScroll = validPdfContainer.scrollTop;
             if (afterScroll > beforeScroll) {
-              console.log('✅ [AutoStudy] PDF容器滚动成功:', afterScroll - beforeScroll, 'px');
+              console.log('✅ [AutoStudy] PDF主要内容容器滚动成功:', afterScroll - beforeScroll, 'px');
             } else {
-              console.warn('⚠️ [AutoStudy] PDF容器滚动失败，尝试直接设置');
-              pdfContainer.scrollTop = beforeScroll + scrollAmount;
+              console.warn('⚠️ [AutoStudy] PDF容器滚动无效果，尝试scrollTo');
+              try {
+                validPdfContainer.scrollTo(0, beforeScroll + scrollAmount);
+              } catch (scrollToError) {
+                console.warn('⚠️ [AutoStudy] scrollTo也失败:', scrollToError.message);
+              }
             }
           }, 50);
           
           scrollExecuted = true;
+        } else {
+          console.log('❌ [AutoStudy] 未找到有效的PDF主要内容容器');
         }
         
         // 如果没有PDF容器或滚动失败，使用普通页面滚动
@@ -1571,54 +1617,189 @@ function autoScroll() {
           if (newScroll === currentScroll && scrollAttempts > 5) {
             console.log('🔧 [AutoStudy] 寻找其他可滚动容器...');
             
-            // 查找所有可能可滚动的元素
-            const allScrollable = Array.from(document.querySelectorAll('*')).filter(el => {
-              if (!el || el === document.body || el === document.documentElement) return false;
-              
-              try {
-                const style = window.getComputedStyle(el);
-                return (style.overflowY === 'scroll' || style.overflowY === 'auto') && 
-                       el.scrollHeight > el.clientHeight + 10;
-              } catch (e) {
-                return false;
-              }
-            });
+            // 智能查找主要内容区域，避免滚动侧边栏
+            const mainContentSelectors = [
+              // 主要内容区域选择器（按优先级排序）
+              'main', '[role="main"]', '.main-content', '#main-content',
+              '.content', '#content', '.page-content', '.document-content',
+              '.viewer-content', '.learning-content', '.course-content',
+              '.right-content', '.main-panel', '.content-panel',
+              // 避免左侧导航和侧边栏
+              '.content-wrapper:not(.sidebar):not(.nav):not(.menu)',
+              '.container:not(.sidebar):not(.nav):not(.menu)',
+              'section:not(.sidebar):not(.nav):not(.menu)',
+              'article:not(.sidebar):not(.nav):not(.menu)'
+            ];
             
-            console.log('📋 [AutoStudy] 找到可滚动元素:', allScrollable.length);
+            const allScrollable = [];
+            
+            // 首先尝试主要内容区域选择器
+            for (let selector of mainContentSelectors) {
+              try {
+                const elements = document.querySelectorAll(selector);
+                for (let el of elements) {
+                  if (isMainContentContainer(el)) {
+                    allScrollable.push(el);
+                  }
+                }
+              } catch (e) {
+                console.warn('[AutoStudy] 选择器查找失败:', selector, e.message);
+              }
+            }
+            
+            // 如果还没找到，进行更精确的搜索
+            if (allScrollable.length === 0) {
+              console.log('[AutoStudy] 主要内容选择器未找到，进行精确搜索...');
+              
+              const allElements = document.querySelectorAll('div, section, article, main');
+              for (let el of allElements) {
+                if (isMainContentContainer(el) && !isSidebarOrNavigation(el)) {
+                  allScrollable.push(el);
+                }
+              }
+            }
+            
+            console.log('📋 [AutoStudy] 找到主要内容可滚动元素:', allScrollable.length);
             
             if (allScrollable.length > 0) {
-              // 选择滚动内容最多的容器
-              let bestContainer = allScrollable[0];
-              let maxScrollable = bestContainer.scrollHeight - bestContainer.clientHeight;
+              // 选择最合适的主要内容容器
+              let bestContainer = selectBestMainContentContainer(allScrollable);
               
-              for (let container of allScrollable) {
-                const scrollable = container.scrollHeight - container.clientHeight;
-                if (scrollable > maxScrollable) {
-                  maxScrollable = scrollable;
-                  bestContainer = container;
-                }
+              if (bestContainer) {
+                const maxScrollable = bestContainer.scrollHeight - bestContainer.clientHeight;
+                
+                console.log('🎯 [AutoStudy] 选择最佳主要内容容器:', {
+                  tagName: bestContainer.tagName,
+                  id: bestContainer.id || '无',
+                  className: bestContainer.className || '无',
+                  可滚动高度: maxScrollable,
+                  位置: getElementPosition(bestContainer),
+                  是否主要内容: isMainContentContainer(bestContainer)
+                });
+                
+                const beforeScroll = bestContainer.scrollTop;
+                bestContainer.scrollBy(0, scrollAmount);
+                
+                setTimeout(() => {
+                  if (bestContainer.scrollTop > beforeScroll) {
+                    console.log('✅ [AutoStudy] 主要内容容器滚动成功');
+                  } else {
+                    console.warn('⚠️ [AutoStudy] 主要内容容器滚动无效果');
+                    // 尝试直接设置scrollTop
+                    bestContainer.scrollTop = beforeScroll + scrollAmount;
+                  }
+                }, 100);
+              } else {
+                console.warn('⚠️ [AutoStudy] 没有找到合适的主要内容容器');
               }
-              
-              console.log('🎯 [AutoStudy] 选择最佳滚动容器:', {
-                tagName: bestContainer.tagName,
-                id: bestContainer.id || '无',
-                className: bestContainer.className || '无',
-                可滚动高度: maxScrollable
-              });
-              
-              const beforeScroll = bestContainer.scrollTop;
-              bestContainer.scrollBy(0, scrollAmount);
-              
-              setTimeout(() => {
-                if (bestContainer.scrollTop > beforeScroll) {
-                  console.log('✅ [AutoStudy] 备用容器滚动成功');
-                } else {
-                  console.warn('⚠️ [AutoStudy] 所有滚动方法都失败');
-                }
-              }, 100);
+            } else {
+              console.warn('⚠️ [AutoStudy] 没有找到任何主要内容可滚动容器');
             }
           }
         }, 100);
+        
+        // 辅助函数：检查是否为主要内容容器
+        function isMainContentContainer(el) {
+          if (!el || el === document.body || el === document.documentElement) return false;
+          
+          try {
+            const style = window.getComputedStyle(el);
+            const hasOverflow = style.overflowY === 'scroll' || style.overflowY === 'auto' || style.overflow === 'auto';
+            const isScrollable = el.scrollHeight > el.clientHeight + 20;
+            
+            return hasOverflow && isScrollable;
+          } catch (e) {
+            return false;
+          }
+        }
+        
+        // 辅助函数：检查是否为侧边栏或导航
+        function isSidebarOrNavigation(el) {
+          if (!el) return false;
+          
+          const className = (el.className || '').toLowerCase();
+          const id = (el.id || '').toLowerCase();
+          
+          // 检查是否为侧边栏或导航相关的元素
+          const sidebarKeywords = ['sidebar', 'nav', 'menu', 'navigation', 'aside', 'left-panel', 'side-panel'];
+          const isLeftSide = el.getBoundingClientRect().left < window.innerWidth * 0.3; // 左侧30%区域
+          
+          const hasSidebarClass = sidebarKeywords.some(keyword => 
+            className.includes(keyword) || id.includes(keyword)
+          );
+          
+          return hasSidebarClass || (isLeftSide && el.offsetWidth < window.innerWidth * 0.4);
+        }
+        
+        // 辅助函数：选择最佳的主要内容容器
+        function selectBestMainContentContainer(containers) {
+          if (containers.length === 0) return null;
+          if (containers.length === 1) return containers[0];
+          
+          let bestContainer = null;
+          let bestScore = 0;
+          
+          for (let container of containers) {
+            try {
+              const rect = container.getBoundingClientRect();
+              const scrollableHeight = container.scrollHeight - container.clientHeight;
+              
+              // 评分系统：优先选择右侧、较大、可滚动内容多的容器
+              let score = 0;
+              
+              // 位置分数：右侧内容区域得分更高
+              if (rect.left > window.innerWidth * 0.3) score += 50;
+              if (rect.left > window.innerWidth * 0.5) score += 30;
+              
+              // 大小分数：较大的容器得分更高
+              const areaScore = (rect.width * rect.height) / (window.innerWidth * window.innerHeight) * 100;
+              score += Math.min(areaScore, 50);
+              
+              // 可滚动内容分数
+              score += Math.min(scrollableHeight / 100, 30);
+              
+              // 类名和ID分数：主要内容相关的得分更高
+              const className = (container.className || '').toLowerCase();
+              const id = (container.id || '').toLowerCase();
+              if (className.includes('content') || className.includes('main')) score += 20;
+              if (id.includes('content') || id.includes('main')) score += 20;
+              
+              console.log(`[AutoStudy] 容器评分 ${container.tagName}.${container.className}:`, {
+                总分: Math.round(score),
+                位置分数: rect.left > window.innerWidth * 0.3 ? '右侧+50' : '左侧+0',
+                大小分数: Math.round(areaScore),
+                滚动分数: Math.min(scrollableHeight / 100, 30),
+                可滚动高度: scrollableHeight
+              });
+              
+              if (score > bestScore) {
+                bestScore = score;
+                bestContainer = container;
+              }
+            } catch (e) {
+              console.warn('[AutoStudy] 评估容器时出错:', e.message);
+            }
+          }
+          
+          return bestContainer;
+        }
+        
+        // 辅助函数：获取元素位置信息
+        function getElementPosition(el) {
+          try {
+            const rect = el.getBoundingClientRect();
+            return {
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              相对位置: rect.left < window.innerWidth * 0.3 ? '左侧' : 
+                      rect.left > window.innerWidth * 0.7 ? '右侧' : '中间'
+            };
+          } catch (e) {
+            return { 位置: '未知' };
+          }
+        }
         
       } catch (scrollError) {
         console.error('❌ [AutoStudy] 滚动执行出错:', scrollError);
