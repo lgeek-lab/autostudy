@@ -923,95 +923,956 @@ function processNextFileInList(viewButtons) {
   }
 }
 
-// 处理文件内容查看
+// 处理文件内容查看 - 简化版（直接翻页）
 function handleFileContentView() {
   if (!isRunning || !isProcessingFileList) {
     console.log('[AutoStudy] 插件未运行或未处理文件列表，跳过文件内容查看');
     return;
   }
   
-  console.log('[AutoStudy] === 开始处理文件内容查看 ===');
-  showNotification('开始滚动文件内容...', 'info');
+  console.log('[AutoStudy] === 文件预览已打开，准备浏览 ===');
+  showNotification('文件加载中...', 'info');
   
-  // 检查页面是否已加载
-  const initialHeight = document.documentElement.scrollHeight;
-  console.log('[AutoStudy] 初始页面高度:', initialHeight);
+  // 已经进入预览，不需要检测容器，直接等待内容加载后开始浏览
+  // 使用配置的页面加载等待时间，或默认2秒
+  const loadWaitTime = Math.min(config.pageLoadWait || 2000, 3000);
   
-  // 先滚动到顶部确保从头开始
-  window.scrollTo({ top: 0, behavior: 'instant' });
-  console.log('[AutoStudy] 已滚动到页面顶部');
+  console.log(`[AutoStudy] 等待 ${loadWaitTime/1000} 秒让文件加载...`);
   
-  let scrollAttempts = 0;
-  let lastScrollHeight = 0;
-  let stuckCount = 0;
-  const maxScrollAttempts = 300; // 增加最大滚动次数
-  const maxStuckCount = 10; // 高度不变的最大次数
-  
-  // 滚动到页面底部
-  const scrollToBottom = () => {
+  setTimeout(() => {
     if (!isRunning || !isProcessingFileList) {
-      console.log('[AutoStudy] 状态改变，停止文件滚动');
+      console.log('[AutoStudy] 状态已改变，取消文件浏览');
       return;
     }
     
-    scrollAttempts++;
+    console.log('[AutoStudy] 文件加载完成，开始浏览');
+    startSimpleFileViewing();
+  }, loadWaitTime);
+}
+
+// 简化的文件浏览流程 - 文件列表专用
+function startSimpleFileViewing() {
+  if (!isRunning || !isProcessingFileList) {
+    console.log('[AutoStudy] 状态已改变，取消文件浏览');
+    return;
+  }
+  
+  console.log('[AutoStudy] 启动简化文件浏览流程...');
+  
+  // 等待并检测PDF查看器（可能需要时间加载）
+  detectAndStartViewing();
+}
+
+// 检测并启动浏览（带重试机制）
+function detectAndStartViewing() {
+  let attempts = 0;
+  const maxAttempts = 5;
+  
+  const checkPdfViewer = () => {
+    attempts++;
     
-    const scrollHeight = document.documentElement.scrollHeight;
-    const currentScroll = window.pageYOffset || document.documentElement.scrollTop;
-    const clientHeight = document.documentElement.clientHeight;
-    
-    // 检查页面是否卡住（高度没有变化）
-    if (scrollHeight === lastScrollHeight) {
-      stuckCount++;
-    } else {
-      stuckCount = 0;
-      lastScrollHeight = scrollHeight;
+    if (!isRunning || !isProcessingFileList) {
+      return;
     }
     
-    console.log(`[AutoStudy] 文件滚动: ${currentScroll}/${scrollHeight} (${Math.round(currentScroll/scrollHeight*100)}%), 第${scrollAttempts}次, 卡住${stuckCount}次`);
+    // 检测PDF查看器容器（包括主文档和iframe）
+    let hasPdfViewer = document.querySelector('#viewerContainer') || 
+                       document.querySelector('#viewer') ||
+                       document.querySelector('.pdfViewer');
     
-    // 检查是否完成滚动
-    const isAtBottom = currentScroll + clientHeight >= scrollHeight - 20;
-    const shouldStop = isAtBottom || scrollAttempts >= maxScrollAttempts || stuckCount >= maxStuckCount;
+    let searchLocation = '主文档';
     
-    if (shouldStop) {
-      console.log('[AutoStudy] 文件滚动完成原因:', {
-        atBottom: isAtBottom,
-        maxAttempts: scrollAttempts >= maxScrollAttempts,
-        stuck: stuckCount >= maxStuckCount,
-        currentScroll,
-        scrollHeight,
-        clientHeight
-      });
+    // 如果主文档中没有，检查iframe
+    if (!hasPdfViewer) {
+      const iframes = document.querySelectorAll('iframe');
+      console.log(`[AutoStudy] 主文档未找到PDF容器，检查 ${iframes.length} 个iframe...`);
       
-      showNotification('文件内容浏览完成，准备关闭...', 'success');
-      
-      // 滚动完成，查找并点击关闭按钮
-      setTimeout(() => {
-        closeFileView();
-      }, 2000);
+      for (let iframe of iframes) {
+        try {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (iframeDoc) {
+            const pdfInIframe = iframeDoc.querySelector('#viewerContainer') || 
+                               iframeDoc.querySelector('#viewer') ||
+                               iframeDoc.querySelector('.pdfViewer');
+            
+            if (pdfInIframe) {
+              hasPdfViewer = pdfInIframe;
+              searchLocation = `iframe[src="${iframe.src?.substring(0, 50)}..."]`;
+              console.log('[AutoStudy] ✅ 在iframe中找到PDF容器!', {
+                iframe_src: iframe.src,
+                容器ID: pdfInIframe.id,
+                容器类: pdfInIframe.className
+              });
+              break;
+            }
+          }
+        } catch (e) {
+          // 跨域iframe无法访问，跳过
+          console.log(`[AutoStudy] 无法访问iframe (可能跨域):`, e.message);
+        }
+      }
+    }
+    
+    console.log(`[AutoStudy] 检测PDF容器 (${attempts}/${maxAttempts}):`, {
+      找到容器: !!hasPdfViewer,
+      位置: searchLocation,
+      容器ID: hasPdfViewer?.id || '无',
+      容器类: hasPdfViewer?.className || '无'
+    });
+    
+    if (hasPdfViewer) {
+      console.log('[AutoStudy] ✅ 检测到PDF查看器，等待翻页按钮就绪...');
+      waitForPageButton();
+    } else if (attempts < maxAttempts) {
+      // 继续等待
+      setTimeout(checkPdfViewer, 800);
     } else {
-      // 继续滚动 - 使用平滑滚动提供视觉反馈
-      const scrollAmount = config.scrollSpeed || 80;
-      window.scrollBy({
-        top: scrollAmount,
-        behavior: 'smooth' // 使用smooth提供视觉反馈
-      });
-      
-      // 使用适当的间隔确保动画完成
-      const delay = Math.max(config.scrollDelay || 400, 300);
-      setTimeout(scrollToBottom, delay);
+      console.log('[AutoStudy] ⚠️ 未检测到PDF查看器，执行快速浏览');
+      doQuickView();
     }
   };
   
-  // 延迟开始滚动，确保页面加载完成
-  console.log('[AutoStudy] 等待1秒后开始滚动文件内容...');
-  setTimeout(() => {
-    if (isRunning && isProcessingFileList) {
-      console.log('[AutoStudy] 开始执行文件内容滚动');
-      scrollToBottom();
+  // 立即开始第一次检查
+  checkPdfViewer();
+}
+
+// 等待翻页按钮就绪
+function waitForPageButton() {
+  let attempts = 0;
+  const maxAttempts = 5; // 最多等待5次，每次1秒
+  
+  const checkButton = () => {
+    attempts++;
+    
+    if (!isRunning || !isProcessingFileList) {
+      return;
     }
-  }, 1000);
+    
+    console.log(`[AutoStudy] 检查翻页按钮 (${attempts}/${maxAttempts})...`);
+    const pdfSuccess = tryPdfPageFlipping();
+    
+    if (pdfSuccess) {
+      console.log('[AutoStudy] ✅ 找到翻页按钮，使用PDF翻页模式');
+      return;
+    }
+    
+    // 继续等待或放弃
+    if (attempts < maxAttempts) {
+      setTimeout(checkButton, 1000);
+    } else {
+      console.log('[AutoStudy] ⚠️ 未找到翻页按钮，执行快速浏览');
+      doQuickView();
+    }
+  };
+  
+  // 立即开始第一次检查
+  checkButton();
+}
+
+// 快速浏览文件
+function doQuickView() {
+  if (!isRunning || !isProcessingFileList) {
+    return;
+  }
+  
+  console.log('[AutoStudy] 执行快速浏览');
+  showNotification('快速浏览文件...', 'info');
+  
+  // 快速浏览：等待配置的浏览时间后直接关闭
+  const quickViewTime = Math.min(config.scrollDelay * 3, 3000); // 最多3秒
+  
+  setTimeout(() => {
+    if (!isRunning || !isProcessingFileList) {
+      return;
+    }
+    
+    console.log('[AutoStudy] 快速浏览完成，关闭文件');
+    showNotification('文件浏览完成', 'success');
+    closeFileView();
+  }, quickViewTime);
+}
+
+// 启动文件滚动的函数
+function startFileScrolling() {
+  if (!isRunning || !isProcessingFileList) {
+    console.log('[AutoStudy] 状态已改变，取消文件内容滚动');
+    return;
+  }
+  
+  // 检查是否是PDF查看器，如果是，优先使用翻页模式
+  const isPdfViewer = document.querySelector('#viewerContainer') || 
+                      document.querySelector('#viewer') ||
+                      document.querySelector('.pdfViewer');
+  
+  if (isPdfViewer) {
+    // 尝试使用翻页模式
+    const pdfPageSuccess = tryPdfPageFlipping();
+    
+    if (pdfPageSuccess) {
+      return; // 使用翻页模式，不再使用滚动
+    }
+  }
+  
+  // 延迟一下再开始滚动（回退方案）
+  setTimeout(() => {
+    if (!isRunning || !isProcessingFileList) {
+      console.log('[AutoStudy] 状态已改变，取消文件内容滚动');
+      return;
+    }
+    
+    // 查找可能的滚动容器（文件预览可能在模态框或iframe中）
+    const possibleContainers = [
+      document.querySelector('.modal-body'),
+      document.querySelector('.preview-container'),
+      document.querySelector('.file-preview'),
+      document.querySelector('.document-viewer'),
+      document.querySelector('#viewerContainer'),
+      document.querySelector('#viewer'),
+      document.querySelector('.pdfViewer'),
+      document.querySelector('[class*="preview"]'),
+      document.querySelector('[class*="modal"]'),
+      document.querySelector('iframe')
+    ].filter(el => el && el.scrollHeight > el.clientHeight + 20);
+  
+  // 先滚动到顶部确保从头开始
+  window.scrollTo({ top: 0, behavior: 'instant' });
+    possibleContainers.forEach(container => {
+      try {
+        container.scrollTop = 0;
+      } catch (e) {
+        // 静默忽略
+      }
+    });
+    
+    // 启动独立的文件内容滚动
+    scrollFileContent(possibleContainers);
+    
+  }, 500); // 减少延迟，因为已经在 waitForPdfLoad 中等待过了
+}
+
+// PDF 翻页模式 - 通过点击下一页按钮浏览（增强版，支持iframe）
+function tryPdfPageFlipping() {
+  console.log('[AutoStudy] 尝试PDF翻页模式...');
+  
+  // 首先确定搜索范围（主文档或iframe）
+  let searchDoc = document;
+  let searchContext = '主文档';
+  
+  // 检查iframe中是否有PDF
+  const iframes = document.querySelectorAll('iframe');
+  for (let iframe of iframes) {
+    try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (iframeDoc) {
+        const hasPdf = iframeDoc.querySelector('#viewerContainer') || 
+                      iframeDoc.querySelector('#viewer') ||
+                      iframeDoc.querySelector('.pdfViewer');
+        if (hasPdf) {
+          searchDoc = iframeDoc;
+          searchContext = 'iframe';
+          console.log('[AutoStudy] 在iframe中搜索翻页按钮');
+          break;
+        }
+      }
+    } catch (e) {
+      // 跨域iframe，跳过
+    }
+  }
+  
+  console.log(`[AutoStudy] 搜索范围: ${searchContext}`);
+  
+  // 增强翻页按钮选择器列表
+  const nextButtonSelectors = [
+    '#next', // PDF.js 标准
+    '#pageDown',
+    '.toolbarButton.pageDown',
+    'button[title*="下一页"]',
+    'button[title*="Next"]',
+    'button[title*="next"]',
+    'button[title*="下"]',
+    'button[aria-label*="下一页"]',
+    'button[aria-label*="Next"]',
+    'button[id*="next"]',
+    'button[id*="Next"]',
+    'button[id*="pageDown"]',
+    'button[class*="next"]',
+    'button[class*="pageDown"]',
+    'button[class*="page-down"]',
+    '[data-l10n-id="next"]',
+    '[data-l10n-id="page_down"]',
+    'a[title*="下一页"]',
+    'a[title*="Next"]',
+    'span[title*="下一页"]',
+    '.next-page',
+    '.page-next',
+    '.btn-next'
+  ];
+  
+  let nextButton = null;
+  let foundSelector = '';
+  
+  // 遍历查找可用的按钮（在正确的文档中搜索）
+  const buttonCheckResults = [];
+  
+  for (let selector of nextButtonSelectors) {
+    try {
+      const btn = searchDoc.querySelector(selector);
+      if (btn) {
+        // 使用多种方式检查可见性
+        let isVisible = false;
+        try {
+          isVisible = btn.offsetParent !== null;
+        } catch (e) {
+          // offsetParent 可能报错，使用其他方式
+          const style = window.getComputedStyle(btn);
+          isVisible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+        }
+        
+        const isEnabled = !btn.disabled;
+        
+        buttonCheckResults.push({
+          选择器: selector,
+          找到: true,
+          可见: isVisible,
+          可用: isEnabled,
+          id: btn.id,
+          class: btn.className
+        });
+        
+        // 放宽条件：只要找到按钮且未禁用就可以，不强制要求可见性检查
+        if (isEnabled && (isVisible || selector === '#next' || selector === '#pageDown')) {
+          nextButton = btn;
+          foundSelector = selector;
+          console.log(`[AutoStudy] 找到候选按钮: ${selector}`, { 可见: isVisible, 可用: isEnabled });
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn(`[AutoStudy] 检查按钮 ${selector} 时出错:`, e.message);
+    }
+  }
+  
+  if (!nextButton) {
+    console.log('[AutoStudy] ❌ 未找到可用的翻页按钮');
+    
+    // 打印检查结果
+    if (buttonCheckResults.length > 0) {
+      console.log('[AutoStudy] 按钮检查结果:');
+      buttonCheckResults.forEach(result => {
+        console.log(`  - ${result.选择器}:`, result);
+      });
+    }
+    
+    // 打印页面上所有按钮的详细信息
+    const allButtons = searchDoc.querySelectorAll('button');
+    console.log(`[AutoStudy] ${searchContext}中的所有button元素:`, allButtons.length);
+    
+    if (allButtons.length > 0 && allButtons.length <= 20) {
+      console.log('[AutoStudy] 所有按钮详情:');
+      Array.from(allButtons).forEach((btn, i) => {
+        console.log(`  ${i + 1}.`, {
+          id: btn.id || '无',
+          class: btn.className || '无',
+          title: btn.title || '无',
+          disabled: btn.disabled,
+          visible: btn.offsetParent !== null,
+          text: btn.textContent?.trim().substring(0, 20) || '无'
+        });
+      });
+    }
+    
+    return false;
+  }
+  
+  console.log(`[AutoStudy] ✅ 找到翻页按钮: ${foundSelector}`, {
+    id: nextButton.id,
+    class: nextButton.className
+  });
+  
+  
+  // 查找页码信息（在正确的文档中）
+  const pageNumberSelectors = [
+    '#pageNumber',
+    'input[id*="pageNumber"]',
+    'input[id*="page"]',
+    '.pageNumber'
+  ];
+  
+  let pageNumberInput = null;
+  for (let selector of pageNumberSelectors) {
+    try {
+      const input = searchDoc.querySelector(selector);
+      if (input) {
+        pageNumberInput = input;
+        break;
+      }
+    } catch (e) {
+      // 忽略
+    }
+  }
+  
+  // 查找总页数
+  const numPagesSelectors = [
+    '#numPages',
+    '.numPages',
+    '[id*="numPages"]',
+    'span[id*="Pages"]'
+  ];
+  
+  let totalPages = 0;
+  for (let selector of numPagesSelectors) {
+    try {
+      const element = searchDoc.querySelector(selector);
+      if (element) {
+        const text = element.textContent.trim();
+        const num = parseInt(text);
+        if (!isNaN(num) && num > 0) {
+          totalPages = num;
+          break;
+        }
+      }
+    } catch (e) {
+      // 忽略
+    }
+  }
+  
+  // 如果没找到总页数，尝试从文本中提取 "1 / 10" 格式
+  if (totalPages === 0) {
+    try {
+      const toolbar = searchDoc.querySelector('#toolbarViewer') || 
+                     searchDoc.querySelector('.toolbar') ||
+                     searchDoc.querySelector('[class*="toolbar"]');
+      
+      if (toolbar) {
+        const text = toolbar.textContent;
+        const match = text.match(/(\d+)\s*\/\s*(\d+)/);
+        if (match) {
+          totalPages = parseInt(match[2]);
+        }
+      }
+    } catch (e) {
+      // 静默忽略
+    }
+  }
+  
+  if (totalPages === 0) {
+    totalPages = 100; // 设置一个最大值
+  }
+  
+  console.log(`[AutoStudy] ✅ PDF翻页就绪: 共${totalPages}页`);
+  
+  // 开始翻页
+  startPdfPageFlipping(nextButton, pageNumberInput, totalPages);
+  
+  return true;
+}
+
+// 执行PDF翻页
+function startPdfPageFlipping(nextButton, pageNumberInput, totalPages) {
+  let currentPage = 1;
+  let flipAttempts = 0;
+  const maxFlipAttempts = totalPages + 10; // 加一些容错
+  const pageDelay = config.scrollDelay || 1000; // 使用滚动延迟作为翻页延迟
+  
+  console.log(`[AutoStudy] 开始翻页: 共${totalPages}页`);
+  showNotification(`开始翻页 (共${totalPages}页)...`, 'info');
+  
+  const flipNextPage = () => {
+    if (!isRunning || !isProcessingFileList) {
+      return;
+    }
+    
+    flipAttempts++;
+    
+    // 获取当前页码
+    if (pageNumberInput) {
+      try {
+        currentPage = parseInt(pageNumberInput.value) || currentPage;
+      } catch (e) {
+        // 忽略
+      }
+    }
+    
+    // 减少日志：每5页打印一次
+    if (currentPage % 5 === 0 || currentPage === 1) {
+      console.log(`[AutoStudy] 翻页进度: ${currentPage}/${totalPages}`);
+      showNotification(`浏览: ${currentPage}/${totalPages}页`, 'info');
+    }
+    
+    // 检查是否完成
+    if (currentPage >= totalPages || flipAttempts >= maxFlipAttempts) {
+      console.log(`[AutoStudy] ✅ PDF翻页完成 (${currentPage}页)`);
+      showNotification('PDF浏览完成！', 'success');
+      
+      setTimeout(() => {
+        closeFileView();
+      }, 2000);
+      
+      return;
+    }
+    
+    // 检查按钮是否还可用
+    if (!nextButton || nextButton.disabled || nextButton.offsetParent === null) {
+      console.log('[AutoStudy] 翻页按钮不可用，结束浏览');
+      
+      setTimeout(() => {
+        closeFileView();
+      }, 2000);
+      
+      return;
+    }
+    
+    // 点击下一页
+    try {
+      nextButton.click();
+      
+      // 等待页面加载后继续
+      setTimeout(flipNextPage, pageDelay);
+      
+    } catch (error) {
+      console.error('[AutoStudy] 点击翻页失败:', error);
+      
+      setTimeout(() => {
+        closeFileView();
+      }, 2000);
+    }
+  };
+  
+  // 开始第一次翻页
+  setTimeout(flipNextPage, pageDelay);
+}
+
+// 独立的文件内容滚动函数 - 增强兼容性版本
+function scrollFileContent(scrollableContainers = []) {
+  console.log('[AutoStudy] 启动滚动模式...');
+  
+  let fileScrollAttempts = 0;
+  let fileLastScrollHeight = 0;
+  let fileLastScrollTop = 0;
+  let fileStuckCount = 0;
+  const maxFileScrollAttempts = 300;
+  const maxFileStuckCount = 15;
+  
+  // 检查是否为侧边栏或导航元素（需要排除）
+  const isSidebarOrNavigation = (element) => {
+    if (!element) return false;
+    
+    const className = (element.className || '').toLowerCase();
+    const id = (element.id || '').toLowerCase();
+    
+    // 排除关键词
+    const excludeKeywords = [
+      'sidebar', 'side-bar', 'sidenav', 'side-nav',
+      'menu', 'navigation', 'nav-', 'aside',
+      'left-panel', 'right-panel', 'side-panel',
+      'toolbar', 'tool-bar', 'outline', 'toc',
+      'thumbnail', 'minimap'
+    ];
+    
+    const isExcluded = excludeKeywords.some(keyword => 
+      className.includes(keyword) || id.includes(keyword)
+    );
+    
+    if (isExcluded) {
+      console.log('[AutoStudy] 🚫 排除侧边栏/导航元素:', {
+        类名: className,
+        ID: id
+      });
+      return true;
+    }
+    
+    // 检查位置和大小（侧边栏通常较窄）
+    try {
+      const rect = element.getBoundingClientRect();
+      const windowWidth = window.innerWidth;
+      
+      // 宽度小于窗口30%的元素，可能是侧边栏
+      const isNarrow = rect.width < windowWidth * 0.3;
+      
+      // 在最左侧或最右侧的窄元素
+      const isLeftSide = rect.left < 50 && isNarrow;
+      const isRightSide = rect.right > windowWidth - 50 && isNarrow;
+      
+      if (isLeftSide || isRightSide) {
+        console.log('[AutoStudy] 🚫 排除窄边栏元素:', {
+          宽度: Math.round(rect.width),
+          位置: isLeftSide ? '左侧' : '右侧',
+          类名: className
+        });
+        return true;
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+    
+    return false;
+  };
+  
+  // 查找最佳滚动容器（更智能的选择）
+  const findBestScrollContainer = () => {
+    // PDF.js 特定容器（最高优先级）
+    const pdfContainers = [
+      document.querySelector('#viewerContainer'),
+      document.querySelector('#viewer'),
+      document.querySelector('.pdfViewer'),
+      document.querySelector('[id*="viewer"]'),
+      document.querySelector('[class*="viewer"]')
+    ].filter(el => el && !isSidebarOrNavigation(el));
+    
+    if (pdfContainers.length > 0) {
+      // 选择可滚动的PDF容器
+      for (let container of pdfContainers) {
+        // 降低阈值：即使差值为0，也选择它（PDF可能还在加载）
+        if (container.scrollHeight >= container.clientHeight) {
+          if (fileScrollAttempts === 0) {
+            console.log('[AutoStudy] ✅ 选择PDF容器:', container.id || container.className);
+          }
+          return container;
+        }
+      }
+      
+      // 如果都不可滚动，但有 #viewerContainer 或 #viewer，仍然返回它
+      const primaryContainer = pdfContainers.find(c => 
+        c.id === 'viewerContainer' || c.id === 'viewer'
+      );
+      
+      if (primaryContainer) {
+        if (fileScrollAttempts === 0) {
+          console.log('[AutoStudy] 选择PDF容器（等待加载）:', primaryContainer.id);
+        }
+        return primaryContainer;
+      }
+    }
+    
+    // 使用传入的容器（但排除侧边栏）
+    if (scrollableContainers.length > 0) {
+      const validContainers = scrollableContainers.filter(c => !isSidebarOrNavigation(c));
+      if (validContainers.length > 0) {
+        return validContainers[0];
+      }
+    }
+    
+    // 查找主要内容区域的可滚动容器
+    const mainContentSelectors = [
+      'main',
+      '[role="main"]',
+      '.main-content',
+      '#main-content',
+      '.content',
+      '#content',
+      '.page-content',
+      '.document-content',
+      '.full-screen-mode-content', // 全屏内容区
+      '.preview-content',
+      '.file-content'
+    ];
+    
+    for (let selector of mainContentSelectors) {
+      try {
+        const element = document.querySelector(selector);
+        if (element && !isSidebarOrNavigation(element)) {
+          const style = window.getComputedStyle(element);
+          const isScrollable = element.scrollHeight > element.clientHeight + 50;
+          const hasOverflow = style.overflowY === 'scroll' || style.overflowY === 'auto';
+          
+          if (isScrollable && hasOverflow) {
+            if (fileScrollAttempts === 0) {
+              console.log('[AutoStudy] 选择主内容区域:', selector);
+            }
+            return element;
+          }
+        }
+      } catch (e) {
+        // 忽略选择器错误
+      }
+    }
+    
+    // 查找任何可滚动的容器（排除侧边栏）
+    const allDivs = document.querySelectorAll('div');
+    const candidates = [];
+    
+    for (let div of allDivs) {
+      if (isSidebarOrNavigation(div)) continue; // 跳过侧边栏
+      
+      if (div.scrollHeight > div.clientHeight + 50) {
+        const style = window.getComputedStyle(div);
+        if (style.overflowY === 'scroll' || style.overflowY === 'auto') {
+          candidates.push({
+            element: div,
+            scrollableHeight: div.scrollHeight - div.clientHeight,
+            width: div.getBoundingClientRect().width,
+            className: div.className || '',
+            id: div.id || ''
+          });
+        }
+      }
+    }
+    
+    // 选择最大的可滚动区域（通常是主内容）
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => {
+        // 优先选择更大的可滚动高度和宽度
+        const scoreA = a.scrollableHeight * a.width;
+        const scoreB = b.scrollableHeight * b.width;
+        return scoreB - scoreA;
+      });
+      
+      const best = candidates[0];
+      if (fileScrollAttempts === 0) {
+        console.log('[AutoStudy] 选择容器:', best.id || best.className || 'div');
+      }
+      
+      return best.element;
+    }
+    
+    return null;
+  };
+  
+  // 递归滚动函数
+  const scrollStep = () => {
+    // 状态检查
+    if (!isRunning || !isProcessingFileList) {
+      console.log('[AutoStudy] 文件滚动中断 - 状态改变');
+      return;
+    }
+    
+    fileScrollAttempts++;
+    
+    // 每次重新查找容器（防止DOM变化）
+    const primaryContainer = findBestScrollContainer();
+    
+    // 获取当前滚动信息（文档级别）
+    const docScrollHeight = document.documentElement.scrollHeight;
+    const docScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const docClientHeight = document.documentElement.clientHeight;
+    
+    // 检查容器滚动
+    let containerScrollInfo = null;
+    
+    if (primaryContainer) {
+      try {
+        containerScrollInfo = {
+          scrollHeight: primaryContainer.scrollHeight,
+          scrollTop: primaryContainer.scrollTop,
+          clientHeight: primaryContainer.clientHeight,
+          maxScroll: primaryContainer.scrollHeight - primaryContainer.clientHeight,
+          element: primaryContainer
+        };
+      } catch (e) {
+        console.warn('[AutoStudy] 获取容器信息失败:', e.message);
+      }
+    }
+    
+    // 综合判断滚动位置
+    const docProgress = docScrollHeight > docClientHeight ? 
+      (docScrollTop / (docScrollHeight - docClientHeight)) * 100 : 100;
+    
+    const containerProgress = containerScrollInfo ? 
+      (containerScrollInfo.scrollTop / containerScrollInfo.maxScroll) * 100 : 100;
+    
+    // 每20次打印一次简要信息
+    if (fileScrollAttempts % 20 === 0 || fileScrollAttempts === 1) {
+      const progress = containerScrollInfo ? 
+        Math.round(containerProgress) : 
+        Math.round(docProgress);
+      console.log(`[AutoStudy] 滚动进度: ${progress}% (第${fileScrollAttempts}次)`);
+    }
+    
+    // 检查是否卡住（文档和容器都没有变化）
+    const currentTotalScroll = docScrollTop + (containerScrollInfo?.scrollTop || 0);
+    const lastTotalScroll = fileLastScrollTop;
+    
+    if (docScrollHeight === fileLastScrollHeight && currentTotalScroll === lastTotalScroll) {
+      fileStuckCount++;
+    } else {
+      fileStuckCount = 0;
+      fileLastScrollHeight = docScrollHeight;
+      fileLastScrollTop = currentTotalScroll;
+    }
+    
+    // 判断是否完成滚动（改进版）
+    const docAtBottom = (docScrollTop + docClientHeight >= docScrollHeight - 30) || docProgress >= 95;
+    
+    // 容器完成判断：只有当容器确实存在且到达底部时才算完成
+    let containerAtBottom = false;
+    if (containerScrollInfo) {
+      containerAtBottom = (containerScrollInfo.scrollTop + containerScrollInfo.clientHeight >= containerScrollInfo.scrollHeight - 30) ||
+                         containerProgress >= 95;
+    } else {
+      // 如果没有容器信息，检查是否是初期（给更多时间查找容器）
+      if (fileScrollAttempts < 5) {
+        // 初期没找到容器，不认为完成
+        containerAtBottom = false;
+      } else {
+        // 多次尝试后仍没容器，依赖文档滚动
+        containerAtBottom = docAtBottom;
+      }
+    }
+    
+    // 综合完成条件（更严格）
+    const naturalComplete = containerScrollInfo ? 
+      (docAtBottom && containerAtBottom) : // 有容器：两者都完成
+      docAtBottom; // 无容器：仅文档完成
+    
+    const isComplete = naturalComplete || 
+                      fileScrollAttempts >= maxFileScrollAttempts || 
+                      fileStuckCount >= maxFileStuckCount;
+    
+    if (isComplete) {
+      const reason = fileScrollAttempts >= maxFileScrollAttempts ? '达到最大次数' :
+                    fileStuckCount >= maxFileStuckCount ? '滚动卡住' : '到达底部';
+      console.log(`[AutoStudy] ✅ 滚动完成: ${reason}`);
+      
+      showNotification('浏览完成，准备关闭...', 'success');
+      
+      // 滚动完成，关闭文件视图
+      setTimeout(() => {
+        closeFileView();
+      }, 2000);
+      
+    } else {
+      // 继续滚动 - 使用多种兼容方式
+      const scrollAmount = config.scrollSpeed || 80;
+      let scrollSuccess = false;
+      
+      // 方法1: 优先滚动容器（使用直接设置 scrollTop）
+      if (primaryContainer) {
+        try {
+          const beforeScroll = primaryContainer.scrollTop;
+          const targetScroll = beforeScroll + scrollAmount;
+          
+          // 尝试多种滚动方式
+          // 方式1: 直接设置 scrollTop（最兼容）
+          primaryContainer.scrollTop = targetScroll;
+          
+          // 验证滚动是否成功
+          const afterScroll = primaryContainer.scrollTop;
+          if (afterScroll > beforeScroll) {
+            scrollSuccess = true;
+            if (fileScrollAttempts % 10 === 0 || fileScrollAttempts === 1) {
+              console.log('[AutoStudy] ✅ 容器滚动成功（scrollTop）:', {
+                从: beforeScroll,
+                到: afterScroll,
+                增加: afterScroll - beforeScroll,
+                容器: primaryContainer.id || primaryContainer.className
+              });
+            }
+          } else {
+            // 方式2: 尝试 scrollBy
+            try {
+              primaryContainer.scrollBy(0, scrollAmount);
+              if (primaryContainer.scrollTop > beforeScroll) {
+                scrollSuccess = true;
+                console.log('[AutoStudy] ✅ 容器滚动成功（scrollBy）');
+              }
+            } catch (scrollByErr) {
+              console.warn('[AutoStudy] scrollBy失败:', scrollByErr.message);
+            }
+          }
+          
+          if (!scrollSuccess && fileScrollAttempts % 10 === 0) {
+            console.log('[AutoStudy] ⚠️ 容器滚动未生效，可能已到底部');
+          }
+          
+        } catch (e) {
+          console.warn('[AutoStudy] ❌ 容器滚动失败:', e.message);
+        }
+      }
+      
+      // 方法2: 同时滚动文档（确保有视觉反馈）
+      try {
+        const beforeDocScroll = window.pageYOffset || document.documentElement.scrollTop;
+        
+        // 尝试多种文档滚动方式
+        try {
+          window.scrollBy(0, scrollAmount);
+        } catch (scrollByErr) {
+          // fallback: 直接设置 scrollTop
+          document.documentElement.scrollTop = beforeDocScroll + scrollAmount;
+        }
+        
+        const afterDocScroll = window.pageYOffset || document.documentElement.scrollTop;
+        if (afterDocScroll > beforeDocScroll) {
+          scrollSuccess = true;
+          if (fileScrollAttempts % 10 === 0 || fileScrollAttempts === 1) {
+            console.log('[AutoStudy] ✅ 文档滚动成功:', afterDocScroll - beforeDocScroll, 'px');
+          }
+        }
+      } catch (e) {
+        console.warn('[AutoStudy] ❌ 文档滚动失败:', e.message);
+      }
+      
+      // 如果卡住太久，尝试更激进的滚动
+      if (fileStuckCount > 8) {
+        const largerAmount = scrollAmount * 3;
+        console.log('[AutoStudy] 🔧 检测到卡住，使用更大步长:', largerAmount);
+        
+        setTimeout(() => {
+          if (primaryContainer) {
+            try {
+              const currentTop = primaryContainer.scrollTop;
+              primaryContainer.scrollTop = currentTop + largerAmount;
+              console.log('[AutoStudy] 强制滚动容器:', currentTop, '->', primaryContainer.scrollTop);
+            } catch (e) {
+              console.warn('[AutoStudy] 强制容器滚动失败:', e);
+            }
+          }
+          
+          try {
+            const currentDocTop = document.documentElement.scrollTop;
+            document.documentElement.scrollTop = currentDocTop + largerAmount;
+            console.log('[AutoStudy] 强制滚动文档:', currentDocTop, '->', document.documentElement.scrollTop);
+          } catch (e) {
+            console.warn('[AutoStudy] 强制文档滚动失败:', e);
+          }
+        }, 100);
+      }
+      
+      // 如果完全卡住，尝试跳转滚动
+      if (fileStuckCount > 12) {
+        console.log('[AutoStudy] 🚀 严重卡住，尝试跳转滚动');
+        setTimeout(() => {
+          if (primaryContainer) {
+            try {
+              const jumpTo = Math.min(
+                primaryContainer.scrollTop + scrollAmount * 5,
+                primaryContainer.scrollHeight - primaryContainer.clientHeight
+              );
+              primaryContainer.scrollTop = jumpTo;
+              console.log('[AutoStudy] 跳转容器到:', jumpTo);
+            } catch (e) {
+              console.warn('[AutoStudy] 跳转容器失败:', e);
+            }
+          }
+        }, 150);
+      }
+      
+      // 继续下一次滚动
+      const delay = Math.max(config.scrollDelay || 400, 300);
+      setTimeout(scrollStep, delay);
+    }
+  };
+  
+  // 开始滚动前的准备
+  console.log('[AutoStudy] 文件内容滚动准备启动...');
+  
+  // 立即尝试查找容器
+  const initialContainer = findBestScrollContainer();
+  if (initialContainer) {
+    console.log('[AutoStudy] ✅ 找到初始滚动容器:', {
+      标签: initialContainer.tagName,
+      ID: initialContainer.id || '无',
+      类名: initialContainer.className || '无',
+      scrollHeight: initialContainer.scrollHeight,
+      clientHeight: initialContainer.clientHeight,
+      可滚动高度: initialContainer.scrollHeight - initialContainer.clientHeight
+    });
+  } else {
+    console.warn('[AutoStudy] ⚠️ 未找到明确的滚动容器，将使用文档滚动');
+  }
+  
+  // 延迟启动滚动
+  setTimeout(scrollStep, 500);
 }
 
 // 关闭文件查看
@@ -1523,92 +2384,91 @@ function autoScroll() {
       }
       
       try {
-        // 智能PDF容器检测 - 优先主要内容区域
-        const pdfContainerCandidates = [
-          document.querySelector('#viewerContainer'),
-          document.querySelector('#viewer'),
-          document.querySelector('.pdfViewer'),
-          document.querySelector('#outerContainer'),
-          document.querySelector('.pdf-container')
-        ].filter(Boolean);
-        
-        let scrollExecuted = false;
-        let validPdfContainer = null;
-        
-        // 检测有效的PDF容器，排除侧边栏
-        for (let container of pdfContainerCandidates) {
-          if (!container) continue;
-          
+        // 只在非文本页面才检测PDF容器，文本页面直接使用页面滚动
+        if (currentPageType === 'text') {
+          // 文本页面：直接使用页面级别滚动，不检测PDF容器
           try {
-            const isScrollable = container.scrollHeight > container.clientHeight + 10;
-            const isMainContent = !isSidebarOrNavigation(container);
-            const rect = container.getBoundingClientRect();
-            const isVisible = rect.width > 0 && rect.height > 0;
-            
-            console.log(`📄 [AutoStudy] 检测PDF容器 ${container.id || container.className}:`, {
-              是否可滚动: isScrollable,
-              是否主要内容: isMainContent,
-              是否可见: isVisible,
-              位置: rect.left < window.innerWidth * 0.3 ? '左侧' : '右侧',
-              宽度: Math.round(rect.width),
-              高度: Math.round(rect.height)
-            });
-            
-            if (isScrollable && isMainContent && isVisible) {
-              validPdfContainer = container;
-              break;
-            }
-          } catch (error) {
-            console.warn('⚠️ [AutoStudy] 检测PDF容器时出错:', error.message);
+            window.scrollBy(0, scrollAmount);
+          } catch (e) {
+            // fallback: 直接设置 scrollTop
+            document.documentElement.scrollTop = 
+              (document.documentElement.scrollTop || 0) + scrollAmount;
           }
-        }
-        
-        if (validPdfContainer) {
-          console.log('✅ [AutoStudy] 找到有效PDF主要内容容器，开始滚动:', {
-            容器ID: validPdfContainer.id || '无',
-            容器类: validPdfContainer.className || '无',
-            滚动前位置: validPdfContainer.scrollTop,
-            总高度: validPdfContainer.scrollHeight,
-            可见高度: validPdfContainer.clientHeight,
-            位置信息: getElementPosition(validPdfContainer)
-          });
-          
-          const beforeScroll = validPdfContainer.scrollTop;
-          
-          try {
-            validPdfContainer.scrollBy(0, scrollAmount);
-            console.log('📄 [AutoStudy] 使用scrollBy方法滚动PDF容器');
-          } catch (scrollByError) {
-            console.warn('⚠️ [AutoStudy] scrollBy失败，尝试直接设置scrollTop');
-            validPdfContainer.scrollTop = beforeScroll + scrollAmount;
-          }
-          
-          setTimeout(() => {
-            const afterScroll = validPdfContainer.scrollTop;
-            if (afterScroll > beforeScroll) {
-              console.log('✅ [AutoStudy] PDF主要内容容器滚动成功:', afterScroll - beforeScroll, 'px');
-            } else {
-              console.warn('⚠️ [AutoStudy] PDF容器滚动无效果，尝试scrollTo');
-              try {
-                validPdfContainer.scrollTo(0, beforeScroll + scrollAmount);
-              } catch (scrollToError) {
-                console.warn('⚠️ [AutoStudy] scrollTo也失败:', scrollToError.message);
-              }
-            }
-          }, 50);
-          
-          scrollExecuted = true;
         } else {
-          console.log('❌ [AutoStudy] 未找到有效的PDF主要内容容器');
-        }
-        
-        // 如果没有PDF容器或滚动失败，使用普通页面滚动
-        if (!scrollExecuted) {
-          console.log('🔄 [AutoStudy] 使用页面级别滚动');
-          window.scrollBy({
-            top: scrollAmount,
-            behavior: 'smooth'
-          });
+          // 非文本页面：检测PDF容器
+          const pdfContainerCandidates = [
+            document.querySelector('#viewerContainer'),
+            document.querySelector('#viewer'),
+            document.querySelector('.pdfViewer'),
+            document.querySelector('#outerContainer'),
+            document.querySelector('.pdf-container')
+          ].filter(Boolean);
+          
+          let scrollExecuted = false;
+          let validPdfContainer = null;
+          
+          // 检测有效的PDF容器，排除侧边栏
+          for (let container of pdfContainerCandidates) {
+            if (!container) continue;
+            
+            try {
+              const isScrollable = container.scrollHeight > container.clientHeight + 10;
+              const isMainContent = !isSidebarOrNavigation(container);
+              const rect = container.getBoundingClientRect();
+              const isVisible = rect.width > 0 && rect.height > 0;
+              
+              // 只在首次检测时打印详细信息
+              if (scrollAttempts === 1) {
+                console.log(`📄 [AutoStudy] 检测PDF容器 ${container.id || container.className}:`, {
+                  是否可滚动: isScrollable,
+                  是否主要内容: isMainContent,
+                  是否可见: isVisible,
+                  位置: rect.left < window.innerWidth * 0.3 ? '左侧' : '右侧',
+                  宽度: Math.round(rect.width),
+                  高度: Math.round(rect.height)
+                });
+              }
+              
+              if (isScrollable && isMainContent && isVisible) {
+                validPdfContainer = container;
+                break;
+              }
+            } catch (error) {
+              console.warn('⚠️ [AutoStudy] 检测PDF容器时出错:', error.message);
+            }
+          }
+          
+          if (validPdfContainer) {
+            if (scrollAttempts === 1) {
+              console.log('✅ [AutoStudy] 找到有效PDF主要内容容器:', {
+                容器ID: validPdfContainer.id || '无',
+                容器类: validPdfContainer.className || '无'
+              });
+            }
+            
+            const beforeScroll = validPdfContainer.scrollTop;
+            
+            try {
+              validPdfContainer.scrollBy(0, scrollAmount);
+            } catch (scrollByError) {
+              validPdfContainer.scrollTop = beforeScroll + scrollAmount;
+            }
+            
+            scrollExecuted = true;
+          }
+          
+          // 如果没有PDF容器或滚动失败，使用普通页面滚动
+          if (!scrollExecuted) {
+            if (scrollAttempts === 1) {
+              console.log('🔄 [AutoStudy] 未找到PDF容器，使用页面级别滚动');
+            }
+            try {
+              window.scrollBy(0, scrollAmount);
+            } catch (e) {
+              document.documentElement.scrollTop = 
+                (document.documentElement.scrollTop || 0) + scrollAmount;
+            }
+          }
         }
         
         // 备用滚动：如果前面的方法都没有明显效果，尝试其他容器
@@ -1815,24 +2675,27 @@ function autoScroll() {
       if (scrollStuckCount > 20) {
         setTimeout(() => {
           try {
-            window.scrollBy({
-              top: scrollAmount * 2,
-              behavior: 'smooth'
-            });
+            // 使用简单的 scrollBy 避免 offsetParent 错误
+            window.scrollBy(0, scrollAmount * 2);
           } catch (e) {
             console.warn('[AutoStudy] 额外滚动失败:', e);
+            // fallback
+            try {
+              document.documentElement.scrollTop = 
+                (document.documentElement.scrollTop || 0) + (scrollAmount * 2);
+            } catch (e2) {
+              console.warn('[AutoStudy] 备用滚动也失败:', e2);
+            }
           }
         }, 200);
       }
       
-      // 最后手段：直接跳到页面末尾（但仍使用平滑滚动）
+      // 最后手段：直接跳到页面末尾
       if (scrollStuckCount > 30) {
         setTimeout(() => {
           try {
-            window.scrollTo({
-              top: document.documentElement.scrollHeight,
-              behavior: 'smooth'
-            });
+            // 直接设置 scrollTop 避免 offsetParent 错误
+            document.documentElement.scrollTop = document.documentElement.scrollHeight;
           } catch (e) {
             console.warn('[AutoStudy] 跳转到底部失败:', e);
           }
@@ -2964,11 +3827,175 @@ window.autoStudyForceTextScroll = function() {
   startTextScrolling();
 };
 
+// 暴露文件列表测试函数
+window.autoStudyTestFileList = function() {
+  console.log('=== [AutoStudy] 测试文件列表功能 ===');
+  
+  // 停止当前运行
+  stopScrolling();
+  
+  setTimeout(() => {
+    isRunning = true;
+    isProcessingFileList = true;
+    isWatchingVideo = false;
+    isWaitingForNextPage = false;
+    currentPageType = 'filelist';
+    fileListIndex = 0;
+    
+    console.log('[AutoStudy] 开始测试文件列表处理...');
+    handleFileListPage();
+  }, 500);
+};
+
+// 暴露文件内容滚动测试函数
+window.autoStudyTestFileScroll = function() {
+  console.log('=== [AutoStudy] 测试文件内容滚动 ===');
+  
+  isRunning = true;
+  isProcessingFileList = true;
+  isWatchingVideo = false;
+  isWaitingForNextPage = false;
+  
+  console.log('[AutoStudy] 强制启动文件内容滚动');
+  handleFileContentView();
+};
+
+// 暴露PDF翻页测试函数
+window.autoStudyTestPdfFlip = function() {
+  console.log('=== [AutoStudy] 测试PDF翻页功能 ===');
+  
+  isRunning = true;
+  isProcessingFileList = true;
+  isWatchingVideo = false;
+  isWaitingForNextPage = false;
+  
+  console.log('[AutoStudy] 尝试PDF翻页模式');
+  const success = tryPdfPageFlipping();
+  
+  if (!success) {
+    console.log('[AutoStudy] PDF翻页模式不可用');
+    showNotification('PDF翻页模式不可用，请检查控制台日志', 'warning');
+  }
+};
+
+// 暴露手动滚动容器测试函数
+window.autoStudyManualScrollTest = function() {
+  console.log('=== [AutoStudy] 手动滚动容器测试（增强版） ===');
+  
+  // 查找所有可能的滚动容器
+  const allDivs = document.querySelectorAll('div');
+  const scrollableContainers = [];
+  
+  allDivs.forEach(div => {
+    if (div.scrollHeight > div.clientHeight + 10) {
+      const rect = div.getBoundingClientRect();
+      const className = div.className || '';
+      const id = div.id || '';
+      
+      // 检查是否为侧边栏
+      const isSidebar = ['sidebar', 'side-bar', 'sidenav', 'menu', 'navigation', 'nav-', 
+                         'toolbar', 'outline', 'toc', 'thumbnail'].some(keyword => 
+        className.toLowerCase().includes(keyword) || id.toLowerCase().includes(keyword)
+      );
+      
+      const isNarrow = rect.width < window.innerWidth * 0.3;
+      const isEdge = rect.left < 50 || rect.right > window.innerWidth - 50;
+      
+      scrollableContainers.push({
+        element: div,
+        id: id || '(无ID)',
+        className: className || '(无类名)',
+        scrollHeight: div.scrollHeight,
+        clientHeight: div.clientHeight,
+        scrollableHeight: div.scrollHeight - div.clientHeight,
+        width: Math.round(rect.width),
+        isSidebar: isSidebar || (isNarrow && isEdge),
+        位置: rect.left < 50 ? '左侧' : rect.right > window.innerWidth - 50 ? '右侧' : '中间'
+      });
+    }
+  });
+  
+  // 按可滚动高度排序
+  scrollableContainers.sort((a, b) => b.scrollableHeight - a.scrollableHeight);
+  
+  console.log(`\n📊 找到 ${scrollableContainers.length} 个可滚动容器:\n`);
+  
+  scrollableContainers.forEach((container, index) => {
+    const prefix = container.isSidebar ? '🚫 [侧边栏-已排除]' : '✅ [主内容候选]';
+    console.log(`${index + 1}. ${prefix}`, {
+      ID: container.id,
+      类名: container.className.substring(0, 40),
+      可滚动高度: container.scrollableHeight,
+      宽度: container.width,
+      位置: container.位置
+    });
+    
+    // 只测试前3个非侧边栏容器
+    if (!container.isSidebar && index < 3) {
+      const before = container.element.scrollTop;
+      container.element.scrollTop = before + 100;
+      const after = container.element.scrollTop;
+      
+      console.log(`   📝 滚动测试: ${before} -> ${after} (${after > before ? '成功✅' : '失败❌'})`);
+      
+      // 恢复位置
+      container.element.scrollTop = before;
+    }
+  });
+  
+  // PDF.js 特定容器测试
+  console.log('\n🔍 PDF.js 标准容器检测:');
+  const pdfContainers = [
+    { name: '#viewerContainer', el: document.querySelector('#viewerContainer') },
+    { name: '#viewer', el: document.querySelector('#viewer') },
+    { name: '.pdfViewer', el: document.querySelector('.pdfViewer') }
+  ];
+  
+  pdfContainers.forEach(({ name, el }) => {
+    if (el) {
+      console.log(`✅ ${name}: 找到`, {
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        可滚动: el.scrollHeight > el.clientHeight
+      });
+    } else {
+      console.log(`❌ ${name}: 未找到`);
+    }
+  });
+  
+  // 文档级别滚动测试
+  console.log('\n📄 文档级别滚动测试:');
+  const docBefore = document.documentElement.scrollTop;
+  document.documentElement.scrollTop = docBefore + 100;
+  const docAfter = document.documentElement.scrollTop;
+  console.log(`文档滚动: ${docBefore} -> ${docAfter} (${docAfter > docBefore ? '成功✅' : '失败❌'})`);
+  document.documentElement.scrollTop = docBefore;
+  
+  // 推荐结果
+  const recommended = scrollableContainers.filter(c => !c.isSidebar)[0];
+  if (recommended) {
+    console.log('\n💡 推荐使用的容器:');
+    console.log({
+      ID: recommended.id,
+      类名: recommended.className.substring(0, 50),
+      可滚动高度: recommended.scrollableHeight,
+      宽度: recommended.width
+    });
+  }
+};
+
 // 页面加载时初始化
 loadConfig();
-console.log('[AutoStudy] 内容脚本已加载 - v2.3');
+console.log('[AutoStudy] v2.9 已加载 - PDF翻页优化版');
 console.log('[AutoStudy] 当前页面:', window.location.href);
-console.log('[AutoStudy] 调试提示: 在控制台输入 autoStudyDebug() 查看详细状态');
+console.log('');
+console.log('📖 新功能: PDF自动翻页模式（更稳定、无滚动错误）');
+console.log('');
+console.log('🛠️ 调试函数:');
+console.log('  autoStudyDebug() - 查看状态');
+console.log('  autoStudyTestPdfFlip() - 测试PDF翻页');
+console.log('  autoStudyTestFileScroll() - 测试滚动（备用）');
+console.log('');
 
 // 延迟执行页面类型检测，用于调试
 setTimeout(() => {
@@ -2979,9 +4006,15 @@ setTimeout(() => {
   // 显示当前配置
   console.log('[AutoStudy] 当前配置:', config);
   
-  // 提示用户如何使用
+  // 根据页面类型给出提示
   if (!isRunning) {
     console.log('💡 [AutoStudy] 提示: 点击插件图标启动自动学习，或在控制台运行 autoStudyForceStart() 强制启动');
+    
+    if (detectedType === 'filelist') {
+      console.log('📁 [AutoStudy] 检测到文件列表页面');
+      console.log('   提示: 启动后将自动逐个打开文件并滚动浏览');
+      console.log('   测试: 运行 autoStudyTestFileList() 可单独测试文件列表功能');
+    }
   }
 }, 2000);
 
