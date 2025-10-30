@@ -21,6 +21,7 @@ const defaultConfig = {
   autoClickNext: true,     // 是否自动点击下一个
   maxRetries: 5,           // 最大重试次数
   pageLoadWait: 4000,      // 页面加载等待时间
+  pdfFlipDelay: 1000,      // PDF翻页延迟（毫秒）
   videoSpeed: 2.0,         // 视频播放倍速
   showNotifications: true, // 是否显示通知
   notificationInterval: 5000, // 通知最小间隔（毫秒）
@@ -1372,9 +1373,9 @@ function startPdfPageFlipping(nextButton, pageNumberInput, totalPages) {
   let currentPage = 1;
   let flipAttempts = 0;
   const maxFlipAttempts = totalPages + 10; // 加一些容错
-  const pageDelay = config.scrollDelay || 1000; // 使用滚动延迟作为翻页延迟
+  const pageDelay = config.pdfFlipDelay || 1000; // 使用配置的PDF翻页延迟
   
-  console.log(`[AutoStudy] 开始翻页: 共${totalPages}页`);
+  console.log(`[AutoStudy] 开始翻页: 共${totalPages}页, 翻页间隔: ${pageDelay}ms`);
   showNotification(`开始翻页 (共${totalPages}页)...`, 'info');
   
   const flipNextPage = () => {

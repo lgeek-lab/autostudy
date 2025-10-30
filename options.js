@@ -11,6 +11,7 @@ const defaultSettings = {
   waitAtBottom: 3000,
   maxRetries: 5,
   pageLoadWait: 4000,
+  pdfFlipDelay: 1000,
   videoSpeed: 2.0,
   showNotifications: true,
   notificationInterval: 5000,
@@ -42,6 +43,10 @@ function loadSettings() {
     const pageLoadSeconds = items.pageLoadWait / 1000;
     document.getElementById('pageLoadWait').value = pageLoadSeconds;
     document.getElementById('pageLoadWaitValue').value = pageLoadSeconds;
+    
+    // PDF翻页延迟
+    document.getElementById('pdfFlipDelay').value = items.pdfFlipDelay;
+    document.getElementById('pdfFlipDelayValue').value = items.pdfFlipDelay;
     
     // 视频播放倍速
     document.getElementById('videoSpeed').value = items.videoSpeed;
@@ -115,6 +120,16 @@ function setupEventListeners() {
     pageLoadWait.value = pageLoadWaitValue.value;
   });
   
+  // PDF翻页延迟
+  const pdfFlipDelay = document.getElementById('pdfFlipDelay');
+  const pdfFlipDelayValue = document.getElementById('pdfFlipDelayValue');
+  pdfFlipDelay.addEventListener('input', () => {
+    pdfFlipDelayValue.value = pdfFlipDelay.value;
+  });
+  pdfFlipDelayValue.addEventListener('input', () => {
+    pdfFlipDelay.value = pdfFlipDelayValue.value;
+  });
+  
   // 视频播放倍速
   const videoSpeed = document.getElementById('videoSpeed');
   const videoSpeedValue = document.getElementById('videoSpeedValue');
@@ -152,6 +167,7 @@ function saveSettings(e) {
     waitAtBottom: parseInt(document.getElementById('waitAtBottom').value) * 1000, // 转换为毫秒
     maxRetries: parseInt(document.getElementById('maxRetries').value),
     pageLoadWait: parseInt(document.getElementById('pageLoadWait').value) * 1000, // 转换为毫秒
+    pdfFlipDelay: parseInt(document.getElementById('pdfFlipDelay').value),
     videoSpeed: parseFloat(document.getElementById('videoSpeed').value),
     notificationInterval: parseInt(document.getElementById('notificationInterval').value) * 1000, // 转换为毫秒
     autoClickNext: document.getElementById('autoClickNext').checked,

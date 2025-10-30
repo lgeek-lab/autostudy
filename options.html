@@ -145,6 +145,33 @@
           </div>
 
           <div class="setting-group">
+            <label for="pdfFlipDelay">
+              <span class="label-text">PDF翻页速度（毫秒）</span>
+              <span class="label-desc"
+                >PDF文件翻页间隔时间，值越小翻页越快</span
+              >
+            </label>
+            <div class="input-group">
+              <input
+                type="range"
+                id="pdfFlipDelay"
+                name="pdfFlipDelay"
+                min="500"
+                max="3000"
+                step="100"
+              />
+              <input
+                type="number"
+                id="pdfFlipDelayValue"
+                min="500"
+                max="3000"
+                step="100"
+              />
+              <span class="unit">ms</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
             <label for="videoSpeed">
               <span class="label-text">视频播放倍速</span>
               <span class="label-desc">自动调整视频播放速度</span>
