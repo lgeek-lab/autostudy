@@ -986,7 +986,6 @@ function detectAndStartViewing() {
     // 如果主文档中没有，检查iframe
     if (!hasPdfViewer) {
       const iframes = document.querySelectorAll('iframe');
-      console.log(`[AutoStudy] 主文档未找到PDF容器，检查 ${iframes.length} 个iframe...`);
       
       for (let iframe of iframes) {
         try {
@@ -1014,12 +1013,10 @@ function detectAndStartViewing() {
       }
     }
     
-    console.log(`[AutoStudy] 检测PDF容器 (${attempts}/${maxAttempts}):`, {
-      找到容器: !!hasPdfViewer,
-      位置: searchLocation,
-      容器ID: hasPdfViewer?.id || '无',
-      容器类: hasPdfViewer?.className || '无'
-    });
+    // 只在首次或找到容器时打印
+    if (attempts === 1 || hasPdfViewer) {
+      console.log(`[AutoStudy] PDF容器检测 ${attempts}/${maxAttempts}:`, hasPdfViewer ? '✅ 已找到' : '等待中...');
+    }
     
     if (hasPdfViewer) {
       console.log('[AutoStudy] ✅ 检测到PDF查看器，等待翻页按钮就绪...');
@@ -1049,7 +1046,6 @@ function waitForPageButton() {
       return;
     }
     
-    console.log(`[AutoStudy] 检查翻页按钮 (${attempts}/${maxAttempts})...`);
     const pdfSuccess = tryPdfPageFlipping();
     
     if (pdfSuccess) {
@@ -1153,8 +1149,6 @@ function startFileScrolling() {
 
 // PDF 翻页模式 - 通过点击下一页按钮浏览（增强版，支持iframe）
 function tryPdfPageFlipping() {
-  console.log('[AutoStudy] 尝试PDF翻页模式...');
-  
   // 首先确定搜索范围（主文档或iframe）
   let searchDoc = document;
   let searchContext = '主文档';
@@ -1171,7 +1165,6 @@ function tryPdfPageFlipping() {
         if (hasPdf) {
           searchDoc = iframeDoc;
           searchContext = 'iframe';
-          console.log('[AutoStudy] 在iframe中搜索翻页按钮');
           break;
         }
       }
@@ -1179,8 +1172,6 @@ function tryPdfPageFlipping() {
       // 跨域iframe，跳过
     }
   }
-  
-  console.log(`[AutoStudy] 搜索范围: ${searchContext}`);
   
   // 增强翻页按钮选择器列表
   const nextButtonSelectors = [
@@ -1244,51 +1235,21 @@ function tryPdfPageFlipping() {
         if (isEnabled && (isVisible || selector === '#next' || selector === '#pageDown')) {
           nextButton = btn;
           foundSelector = selector;
-          console.log(`[AutoStudy] 找到候选按钮: ${selector}`, { 可见: isVisible, 可用: isEnabled });
           break;
         }
       }
     } catch (e) {
-      console.warn(`[AutoStudy] 检查按钮 ${selector} 时出错:`, e.message);
+      // 忽略选择器错误
     }
   }
   
   if (!nextButton) {
-    console.log('[AutoStudy] ❌ 未找到可用的翻页按钮');
-    
-    // 打印检查结果
-    if (buttonCheckResults.length > 0) {
-      console.log('[AutoStudy] 按钮检查结果:');
-      buttonCheckResults.forEach(result => {
-        console.log(`  - ${result.选择器}:`, result);
-      });
-    }
-    
-    // 打印页面上所有按钮的详细信息
-    const allButtons = searchDoc.querySelectorAll('button');
-    console.log(`[AutoStudy] ${searchContext}中的所有button元素:`, allButtons.length);
-    
-    if (allButtons.length > 0 && allButtons.length <= 20) {
-      console.log('[AutoStudy] 所有按钮详情:');
-      Array.from(allButtons).forEach((btn, i) => {
-        console.log(`  ${i + 1}.`, {
-          id: btn.id || '无',
-          class: btn.className || '无',
-          title: btn.title || '无',
-          disabled: btn.disabled,
-          visible: btn.offsetParent !== null,
-          text: btn.textContent?.trim().substring(0, 20) || '无'
-        });
-      });
-    }
-    
+    console.log('[AutoStudy] 未找到PDF翻页按钮');
     return false;
   }
   
-  console.log(`[AutoStudy] ✅ 找到翻页按钮: ${foundSelector}`, {
-    id: nextButton.id,
-    class: nextButton.className
-  });
+  console.log(`[AutoStudy] ✅ 找到PDF翻页按钮 (${searchContext})`);
+
   
   
   // 查找页码信息（在正确的文档中）
@@ -1375,7 +1336,7 @@ function startPdfPageFlipping(nextButton, pageNumberInput, totalPages) {
   const maxFlipAttempts = totalPages + 10; // 加一些容错
   const pageDelay = config.pdfFlipDelay || 1000; // 使用配置的PDF翻页延迟
   
-  console.log(`[AutoStudy] 开始翻页: 共${totalPages}页, 翻页间隔: ${pageDelay}ms`);
+  console.log(`[AutoStudy] PDF翻页开始: ${totalPages}页 (间隔${pageDelay}ms)`);
   showNotification(`开始翻页 (共${totalPages}页)...`, 'info');
   
   const flipNextPage = () => {
@@ -1394,15 +1355,14 @@ function startPdfPageFlipping(nextButton, pageNumberInput, totalPages) {
       }
     }
     
-    // 减少日志：每5页打印一次
-    if (currentPage % 5 === 0 || currentPage === 1) {
-      console.log(`[AutoStudy] 翻页进度: ${currentPage}/${totalPages}`);
+    // 减少日志：每10页打印一次
+    if (currentPage % 10 === 0 || currentPage === 1) {
       showNotification(`浏览: ${currentPage}/${totalPages}页`, 'info');
     }
     
     // 检查是否完成
     if (currentPage >= totalPages || flipAttempts >= maxFlipAttempts) {
-      console.log(`[AutoStudy] ✅ PDF翻页完成 (${currentPage}页)`);
+      console.log(`[AutoStudy] PDF浏览完成: ${currentPage}页`);
       showNotification('PDF浏览完成！', 'success');
       
       setTimeout(() => {
@@ -2067,6 +2027,10 @@ function getVideoElements() {
 // 处理视频播放 - 增强版
 function handleVideoPlayback() {
   console.log('[AutoStudy] === 开始处理视频播放 ===');
+  console.log('[AutoStudy] 当前视频配置:', {
+    videoSpeed: config.videoSpeed,
+    configLoaded: window.configLoaded
+  });
   
   const videos = getVideoElements();
   
@@ -2111,14 +2075,18 @@ function handleVideoPlayback() {
       }
     }
     
-    // 设置播放速度
-    if (Math.abs(video.playbackRate - config.videoSpeed) > 0.1) {
+    // 设置播放速度（确保config已加载，否则使用默认值）
+    const targetSpeed = (config && config.videoSpeed) || defaultConfig.videoSpeed || 2.0;
+    
+    if (Math.abs(video.playbackRate - targetSpeed) > 0.1) {
       try {
-        video.playbackRate = config.videoSpeed;
-        console.log(`[AutoStudy] 视频 ${index + 1} 倍速设置为: ${config.videoSpeed}x`);
+        video.playbackRate = targetSpeed;
+        console.log(`[AutoStudy] 视频 ${index + 1} 倍速设置为: ${targetSpeed}x (当前: ${video.playbackRate}x)`);
       } catch (error) {
         console.warn(`[AutoStudy] 视频 ${index + 1} 倍速设置失败:`, error);
       }
+    } else {
+      console.log(`[AutoStudy] 视频 ${index + 1} 播放速度已是 ${video.playbackRate}x`);
     }
     
     // 检查视频完成状态
@@ -2140,13 +2108,24 @@ function handleVideoPlayback() {
       video.play().then(() => {
         playingVideos++;
         console.log(`[AutoStudy] 视频 ${index + 1} 开始播放`);
-        showNotification(`视频播放中 (${config.videoSpeed}x倍速)...`, 'info');
         
-        // 再次确保设置生效
+        const targetSpeed = (config && config.videoSpeed) || defaultConfig.videoSpeed || 2.0;
+        showNotification(`视频播放中 (${targetSpeed}x倍速)...`, 'info');
+        
+        // 再次确保设置生效（有些网站会在播放开始时重置设置）
         setTimeout(() => {
           video.muted = true;
-          video.playbackRate = config.videoSpeed;
+          video.playbackRate = targetSpeed;
+          console.log(`[AutoStudy] 视频 ${index + 1} 再次确认倍速: ${video.playbackRate}x`);
         }, 100);
+        
+        // 第三次确保，某些视频播放器需要多次设置
+        setTimeout(() => {
+          if (Math.abs(video.playbackRate - targetSpeed) > 0.1) {
+            video.playbackRate = targetSpeed;
+            console.log(`[AutoStudy] 视频 ${index + 1} 第三次设置倍速: ${targetSpeed}x`);
+          }
+        }, 500);
         
       }).catch(err => {
         console.warn(`[AutoStudy] 视频 ${index + 1} 自动播放失败:`, err.message);
@@ -2225,6 +2204,27 @@ function startVideoMonitoring() {
       clearInterval(videoCheckInterval);
       return;
     }
+    
+    // 强制确保视频倍速设置（有些播放器会重置）
+    const videos = getVideoElements();
+    const targetSpeed = (config && config.videoSpeed) || defaultConfig.videoSpeed || 2.0;
+    
+    videos.forEach((video, index) => {
+      try {
+        // 强制静音
+        if (!video.muted) {
+          video.muted = true;
+        }
+        
+        // 强制设置倍速
+        if (Math.abs(video.playbackRate - targetSpeed) > 0.1) {
+          video.playbackRate = targetSpeed;
+          console.log(`[AutoStudy] 持续确保视频 ${index + 1} 倍速: ${targetSpeed}x`);
+        }
+      } catch (e) {
+        // 忽略错误
+      }
+    });
     
     // 继续处理视频设置
     handleVideoPlayback();
@@ -2374,14 +2374,9 @@ function autoScroll() {
         console.log('[AutoStudy] 检测到滚动卡住，增加滚动步长:', scrollAmount);
       }
       
-      // 使用平滑滚动来保证视觉效果
-      if (scrollAttempts % 5 === 1) { // 只在第1,6,11...次打印详细信息
-        console.log(`🔄 [AutoStudy] 执行滚动 - 第${scrollAttempts}次:`, {
-          从: Math.round(currentScroll),
-          滚动量: scrollAmount,
-          到: Math.round(currentScroll + scrollAmount),
-          页面高度: currentScrollHeight
-        });
+      // 简化日志：每20次打印一次
+      if (scrollAttempts % 20 === 1) {
+        console.log(`[AutoStudy] 滚动中 #${scrollAttempts}: ${Math.round(currentScroll)}px`);
       }
       
       try {
