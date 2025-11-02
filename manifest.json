@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "自动学习助手",
-  "version": "1.0.0",
+  "version": "3.4.0",
   "description": "自动滚动课程内容并切换到下一页，专为lms.ouchn.cn学习平台设计",
   "permissions": [
     "storage",

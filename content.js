@@ -2010,21 +2010,51 @@ function detectVideo() {
   return result;
 }
 
-// 获取页面中的视频元素
+// 获取页面中的视频元素（包括 iframe 中的）
 function getVideoElements() {
-  const videos = document.querySelectorAll('video');
   const result = [];
   
-  for (let video of videos) {
+  // 1. 获取主文档中的视频
+  const mainVideos = document.querySelectorAll('video');
+  for (let video of mainVideos) {
     if (video.offsetParent !== null) { // 确保视频可见
       result.push(video);
     }
   }
   
+  // 2. 检查所有 iframe 中的视频
+  const iframes = document.querySelectorAll('iframe');
+  console.log(`[AutoStudy] 检测到 ${iframes.length} 个 iframe`);
+  
+  for (let iframe of iframes) {
+    try {
+      // 尝试访问 iframe 内容（可能跨域）
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      
+      if (iframeDoc) {
+        const iframeVideos = iframeDoc.querySelectorAll('video');
+        console.log(`[AutoStudy] iframe 中找到 ${iframeVideos.length} 个视频`);
+        
+        for (let video of iframeVideos) {
+          if (video.offsetParent !== null) {
+            result.push(video);
+          }
+        }
+      }
+    } catch (e) {
+      // 跨域 iframe 无法访问，静默忽略
+      console.log('[AutoStudy] 无法访问 iframe (跨域):', iframe.src?.substring(0, 50));
+    }
+  }
+  
+  if (result.length > 0) {
+    console.log(`[AutoStudy] 总共找到 ${result.length} 个可见视频元素`);
+  }
+  
   return result;
 }
 
-// 处理视频播放 - 增强版
+// 处理视频播放 - 增强版（添加等待机制）
 function handleVideoPlayback() {
   console.log('[AutoStudy] === 开始处理视频播放 ===');
   console.log('[AutoStudy] 当前视频配置:', {
@@ -2039,10 +2069,38 @@ function handleVideoPlayback() {
     return false;
   }
   
+  // 检查播放器是否已加载（特别是MVP播放器）
+  const mvpPlayerLoaded = document.querySelector('[class*="mvp-controls"]') !== null;
+  if (!mvpPlayerLoaded) {
+    console.log('[AutoStudy] ⏳ MVP播放器尚未完全加载，等待1秒后重试...');
+    setTimeout(handleVideoPlayback, 1000);
+    return false;
+  }
+  
   let hasActiveVideo = false;
   let totalVideos = videos.length;
   let playingVideos = 0;
   let completedVideos = 0;
+  
+  // 降级播放函数（直接调用 video.play()）- 移到循环外部
+  function fallbackToDirectPlay(video, index) {
+    video.play().then(() => {
+      playingVideos++;
+      console.log(`[AutoStudy] 视频 ${index + 1} 直接调用 play() 开始播放`);
+      
+      const targetSpeed = (config && config.videoSpeed) || defaultConfig.videoSpeed || 2.0;
+      
+      setTimeout(() => {
+        video.muted = true;
+        video.playbackRate = targetSpeed;
+        console.log(`[AutoStudy] 视频 ${index + 1} 设置倍速: ${targetSpeed}x`);
+      }, 100);
+      
+    }).catch(err => {
+      console.warn(`[AutoStudy] 视频 ${index + 1} 自动播放失败:`, err.message);
+      showNotification('视频自动播放失败，请手动点击播放', 'warning');
+    });
+  }
   
   videos.forEach((video, index) => {
     const videoInfo = {
@@ -2058,6 +2116,48 @@ function handleVideoPlayback() {
     };
     
     console.log(`[AutoStudy] 处理视频 ${index + 1}:`, videoInfo);
+    
+    // 添加多种事件监听（确保能捕获视频完成和进度更新）
+    // 用标记防止重复添加监听器
+    if (!video.dataset.autoStudyListenerAdded) {
+      // ended事件
+      video.addEventListener('ended', function onVideoEnded() {
+        console.log(`[AutoStudy] ✅ 视频 ${index + 1} 触发ended事件 - 真正播放完成`);
+        video.dataset.videoReallyEnded = 'true';
+      }, { once: true });
+      
+      // timeupdate事件（模拟正常观看）
+      video.addEventListener('timeupdate', function onTimeUpdate() {
+        // 每隔一段时间记录一次，模拟正常观看行为
+        if (!video.dataset.lastLogTime || Date.now() - parseInt(video.dataset.lastLogTime) > 10000) {
+          console.log(`[AutoStudy] 视频 ${index + 1} 播放中: ${Math.round(video.currentTime)}s / ${Math.round(video.duration)}s (${Math.round((video.currentTime/video.duration)*100)}%)`);
+          video.dataset.lastLogTime = Date.now().toString();
+          
+          // 触发自定义进度事件（某些平台可能监听）
+          video.dispatchEvent(new Event('progress'));
+        }
+      });
+      
+      // play事件
+      video.addEventListener('play', function onPlay() {
+        console.log(`[AutoStudy] 视频 ${index + 1} 开始播放`);
+      });
+      
+      // pause事件
+      video.addEventListener('pause', function onPause() {
+        if (!video.ended) {
+          console.log(`[AutoStudy] ⚠️ 视频 ${index + 1} 暂停了，尝试恢复播放`);
+          setTimeout(() => {
+            if (video.paused && !video.ended && isRunning) {
+              video.play().catch(e => console.warn('[AutoStudy] 恢复播放失败:', e));
+            }
+          }, 500);
+        }
+      });
+      
+      video.dataset.autoStudyListenerAdded = 'true';
+      console.log(`[AutoStudy] 已为视频 ${index + 1} 添加完整事件监听器`);
+    }
     
     // 等待视频加载完成
     if (video.readyState < 2) { // HAVE_CURRENT_DATA
@@ -2089,60 +2189,72 @@ function handleVideoPlayback() {
       console.log(`[AutoStudy] 视频 ${index + 1} 播放速度已是 ${video.playbackRate}x`);
     }
     
-    // 检查视频完成状态
-    const isNearEnd = video.currentTime > 0 && video.duration > 0 && (video.currentTime >= video.duration - 3);
-    const isCompleted = video.ended || isNearEnd;
+    // 检查视频完成状态 - 更严格的判断（必须真正播放到最后）
+    const hasDuration = video.duration > 0 && !isNaN(video.duration);
+    const remainingTime = hasDuration ? video.duration - video.currentTime : 999;
+    const isReallyNearEnd = hasDuration && video.currentTime > 0 && remainingTime <= 0.5;
+    const isCompleted = video.ended || isReallyNearEnd;
     
     if (isCompleted) {
       completedVideos++;
-      console.log(`[AutoStudy] 视频 ${index + 1} 已完成播放`);
+      console.log(`[AutoStudy] 视频 ${index + 1} 已完成播放 (剩余${remainingTime.toFixed(2)}秒)`);
       return;
+    }
+    
+    // 视频即将结束时提示（剩余5秒）
+    if (hasDuration && remainingTime > 0 && remainingTime <= 5) {
+      console.log(`[AutoStudy] 视频 ${index + 1} 即将播放完成，剩余${remainingTime.toFixed(1)}秒`);
     }
     
     hasActiveVideo = true;
     
-    // 如果视频暂停，尝试播放
+    // 如果视频暂停，尝试通过点击播放按钮来播放
     if (video.paused) {
-      console.log(`[AutoStudy] 视频 ${index + 1} 暂停中，尝试播放...`);
+      console.log(`[AutoStudy] 视频 ${index + 1} 暂停中，查找播放按钮...`);
       
-      video.play().then(() => {
-        playingVideos++;
-        console.log(`[AutoStudy] 视频 ${index + 1} 开始播放`);
-        
-        const targetSpeed = (config && config.videoSpeed) || defaultConfig.videoSpeed || 2.0;
-        showNotification(`视频播放中 (${targetSpeed}x倍速)...`, 'info');
-        
-        // 再次确保设置生效（有些网站会在播放开始时重置设置）
-        setTimeout(() => {
-          video.muted = true;
-          video.playbackRate = targetSpeed;
-          console.log(`[AutoStudy] 视频 ${index + 1} 再次确认倍速: ${video.playbackRate}x`);
-        }, 100);
-        
-        // 第三次确保，某些视频播放器需要多次设置
-        setTimeout(() => {
-          if (Math.abs(video.playbackRate - targetSpeed) > 0.1) {
+      // 优先尝试点击播放按钮（这样能触发平台的进度记录）
+      const playButton = findPlayButton(video);
+      
+      if (playButton) {
+        console.log(`[AutoStudy] ✅ 找到播放按钮，模拟点击`);
+        try {
+          // 模拟真实的用户点击
+          playButton.click();
+          
+          playingVideos++;
+          console.log(`[AutoStudy] 视频 ${index + 1} 通过点击按钮开始播放`);
+          
+          const targetSpeed = (config && config.videoSpeed) || defaultConfig.videoSpeed || 2.0;
+          showNotification(`视频播放中 (${targetSpeed}x倍速)...`, 'info');
+          
+          // 延迟设置倍速和静音（等播放开始后）
+          setTimeout(() => {
+            video.muted = true;
             video.playbackRate = targetSpeed;
-            console.log(`[AutoStudy] 视频 ${index + 1} 第三次设置倍速: ${targetSpeed}x`);
-          }
-        }, 500);
-        
-      }).catch(err => {
-        console.warn(`[AutoStudy] 视频 ${index + 1} 自动播放失败:`, err.message);
-        
-        // 尝试点击播放按钮
-        const playButtons = document.querySelectorAll('.play-btn, .video-play-btn, [class*="play"], button[title*="播放"], button[title*="Play"]');
-        if (playButtons.length > 0) {
-          console.log(`[AutoStudy] 尝试点击播放按钮`);
-          try {
-            playButtons[0].click();
-          } catch (clickError) {
-            console.warn('[AutoStudy] 点击播放按钮失败:', clickError);
-          }
+            console.log(`[AutoStudy] 视频 ${index + 1} 设置倍速: ${video.playbackRate}x, 静音: ${video.muted}`);
+          }, 300);
+          
+          // 再次确保设置生效
+          setTimeout(() => {
+            if (Math.abs(video.playbackRate - targetSpeed) > 0.1) {
+              video.playbackRate = targetSpeed;
+              console.log(`[AutoStudy] 视频 ${index + 1} 再次设置倍速: ${targetSpeed}x`);
+            }
+            if (!video.muted) {
+              video.muted = true;
+            }
+          }, 1000);
+          
+        } catch (clickError) {
+          console.warn('[AutoStudy] 点击播放按钮失败:', clickError);
+          // 降级到直接调用 play()
+          fallbackToDirectPlay(video, index);
         }
-        
-        showNotification('视频需要手动播放，请点击播放按钮', 'warning');
-      });
+      } else {
+        // 没找到播放按钮，降级到直接调用 play()
+        console.log(`[AutoStudy] ⚠️ 未找到播放按钮，尝试直接调用 play()`);
+        fallbackToDirectPlay(video, index);
+      }
     } else {
       playingVideos++;
       console.log(`[AutoStudy] 视频 ${index + 1} 正在播放中 (${videoInfo.currentTime}s/${videoInfo.duration}s)`);
@@ -2155,7 +2267,523 @@ function handleVideoPlayback() {
   return hasActiveVideo;
 }
 
-// 检查所有视频是否播放完成
+// 查找视频的播放按钮 - 智能匹配（支持 iframe）- 增强版
+function findPlayButton(videoElement) {
+  console.log('');
+  console.log('=== 🔍 [AutoStudy] 开始查找播放按钮（增强版）===');
+  
+  // 首先检查视频是否在 iframe 中
+  let searchDocument = document;
+  let isInIframe = false;
+  
+  // 尝试检测视频所在的文档
+  try {
+    if (videoElement.ownerDocument !== document) {
+      searchDocument = videoElement.ownerDocument;
+      isInIframe = true;
+      console.log('[AutoStudy] 检测到视频在 iframe 中');
+    }
+  } catch (e) {
+    console.log('[AutoStudy] 检测 iframe 出错:', e.message);
+  }
+  
+  // 获取视频的位置信息（用于后续位置判断）
+  const videoRect = videoElement.getBoundingClientRect();
+  console.log('[AutoStudy] 视频位置:', {
+    left: Math.round(videoRect.left),
+    top: Math.round(videoRect.top),
+    width: Math.round(videoRect.width),
+    height: Math.round(videoRect.height)
+  });
+  
+  // 1. 首先在视频的父容器中查找（扩大搜索深度）
+  let container = videoElement.parentElement;
+  let searchDepth = 0;
+  const maxDepth = 10; // 增加搜索深度
+  
+  // 向上查找，直到找到一个合适的容器
+  while (container && searchDepth < maxDepth) {
+    const className = (container.className || '').toLowerCase();
+    const id = (container.id || '').toLowerCase();
+    
+    if (className.includes('player') || 
+        className.includes('video') || 
+        className.includes('container') ||
+        className.includes('wrapper') ||
+        id.includes('player') ||
+        id.includes('video')) {
+      console.log(`[AutoStudy] 找到播放器容器 (深度${searchDepth}):`, container.className || container.id || container.tagName);
+      break;
+    }
+    container = container.parentElement;
+    searchDepth++;
+  }
+  
+  if (!container) {
+    container = searchDocument.body;
+    console.log('[AutoStudy] 未找到特定容器，使用整个文档');
+  }
+  
+  console.log('[AutoStudy] 搜索容器:', container.className || container.id || container.tagName);
+  console.log('[AutoStudy] 搜索文档:', isInIframe ? 'iframe 文档' : '主文档');
+  
+  // 2. 定义播放按钮的选择器（按优先级排序）- 大幅扩展
+  const playButtonSelectors = [
+    // 平台特定的播放按钮 - MVP 播放器（用户实测有效）⭐⭐⭐
+    // ⚠️ 注意：优先使用全局查找（document.querySelector），因为手动测试有效
+    '[class*="mvp-controls-left"] button',      // 智能查找控制栏按钮（最高优先级）✅
+    'button.mvp-toggle-play.mvp-first-btn-margin', // 完整类名匹配 ✅
+    'button.mvp-toggle-play',                   // MVP 播放按钮 ✅
+    'button.mvp-first-btn-margin',              // MVP 第一个按钮 ✅
+    '.mvp-controls-left-area button',           // 控制栏左侧按钮
+    '.mvp-replay-player-all-controls button:first-child', // 控制栏第一个按钮
+    'div[class*="mvp-controls-left"] button',
+    'div[class*="mvp-replay-player"] button:first-child',
+    '[class*="mvp-toggle-play"]',               // 宽松匹配
+    'button[class*="mvp"]',
+    
+    // 视频播放器常用的播放按钮类名
+    '.vjs-big-play-button',           // Video.js
+    '.vjs-play-control',
+    '.video-play-button',
+    '.prism-big-play-btn',            // 阿里云播放器
+    '.prism-play-btn',
+    '.bilibili-player-video-btn-start', // B站
+    '.play-btn',
+    '.play-button',
+    '.btn-play',
+    '.player-play',
+    '.video-play',
+    '.playButton',
+    '.PlayButton',
+    
+    // 通用选择器 - 扩展
+    'button.play',
+    'button[class*="play"]',
+    'button[class*="Play"]',
+    'div[class*="play"][class*="button"]',
+    'div[class*="play"][class*="btn"]',
+    'div[class*="Play"][class*="Button"]',
+    'span[class*="play"][class*="button"]',
+    'a[class*="play"]',
+    
+    // aria-label 属性
+    'button[aria-label*="播放"]',
+    'button[aria-label*="Play"]',
+    'button[aria-label*="play"]',
+    '[role="button"][aria-label*="播放"]',
+    '[role="button"][aria-label*="Play"]',
+    '[role="button"][aria-label*="play"]',
+    'div[aria-label*="播放"]',
+    'div[aria-label*="Play"]',
+    
+    // title 属性
+    'button[title*="播放"]',
+    'button[title*="Play"]',
+    'button[title*="play"]',
+    'div[title*="播放"]',
+    'div[title*="Play"]',
+    '[title*="播放"]',
+    
+    // 带有播放图标的元素
+    'button svg[class*="play"]',
+    'button i[class*="play"]',
+    'button .icon-play',
+    'button .fa-play',
+    'div[class*="control"] button:first-child',
+    'div[class*="controls"] button:first-child',
+    
+    // 覆盖层上的播放按钮
+    '.video-cover button',
+    '.video-poster button',
+    '.video-overlay button',
+    '.video-mask button',
+    
+    // 控制栏中的播放按钮
+    '.control-bar button:first-child',
+    '.controls button:first-child',
+    '.player-controls button:first-child',
+    '.video-controls button:first-child'
+  ];
+  
+  console.log('[AutoStudy] 使用', playButtonSelectors.length, '个选择器查找播放按钮');
+  
+  // 3. 优先使用全局查找（document.querySelector）- 与手动测试一致 ⭐⭐⭐
+  console.log('[AutoStudy] 🔍 第一步：全局查找（优先级最高）...');
+  const candidates = [];
+  
+  // 首先尝试用户验证有效的选择器（全局查找）
+  const prioritySelectors = [
+    '[class*="mvp-controls-left"] button',
+    'button.mvp-toggle-play.mvp-first-btn-margin',
+    'button.mvp-toggle-play',
+    'button.mvp-first-btn-margin'
+  ];
+  
+  for (let selector of prioritySelectors) {
+    try {
+      // 使用全局查找（document.querySelector），与手动测试一致
+      const button = searchDocument.querySelector(selector);
+      
+      if (button) {
+        console.log(`[AutoStudy] ✅ 全局查找找到按钮: "${selector}"`);
+        console.log('[AutoStudy] 按钮详情:', {
+          标签: button.tagName,
+          类名: button.className || '(无)',
+          可见: button.offsetParent !== null
+        });
+        
+        // 基础验证
+        if (button.offsetParent === null) {
+          console.log('[AutoStudy] ⚠️ 按钮不可见，跳过');
+          continue;
+        }
+        
+        // 宽松验证
+        const validationResult = isValidPlayButton(button, videoElement, true);
+        if (validationResult.valid) {
+          console.log('[AutoStudy] ✅✅✅ 找到有效播放按钮！');
+          console.log('[AutoStudy] 验证原因:', validationResult.reason);
+          console.log('');
+          return button;
+        } else {
+          console.log('[AutoStudy] ⚠️ 按钮验证失败:', validationResult.reason);
+          // ⭐ 关键：如果全局查找找到了按钮（与手动测试一致），即使验证失败也直接返回
+          // 因为用户手动测试证明这个按钮是可以用的
+          console.log('[AutoStudy] ⚠️ 但全局查找找到了按钮，与手动测试一致，直接使用');
+          console.log('[AutoStudy] ✅✅✅ 使用全局查找找到的按钮！');
+          console.log('');
+          return button;
+        }
+      }
+    } catch (e) {
+      console.warn('[AutoStudy] 全局查找出错:', selector, e.message);
+    }
+  }
+  
+  // 4. 如果全局查找失败，尝试在容器中查找
+  console.log('[AutoStudy] 🔍 第二步：在容器中查找...');
+  let selectorMatchCount = 0;
+  
+  for (let selector of playButtonSelectors) {
+    // 跳过已经全局查找过的选择器
+    if (prioritySelectors.includes(selector)) continue;
+    
+    try {
+      const buttons = container.querySelectorAll(selector);
+      if (buttons.length > 0) {
+        selectorMatchCount++;
+        console.log(`[AutoStudy] 选择器 "${selector}" 匹配到 ${buttons.length} 个元素`);
+      }
+      
+      for (let button of buttons) {
+        // 基础可见性检查
+        if (button.offsetParent === null) continue;
+        
+        const buttonInfo = {
+          element: button,
+          selector: selector,
+          tagName: button.tagName,
+          className: button.className || '(无)',
+          id: button.id || '(无)',
+          text: button.textContent?.trim().substring(0, 30) || '(无文本)',
+          visible: true
+        };
+        
+        // 验证按钮（使用宽松模式）
+        const validationResult = isValidPlayButton(button, videoElement, true);
+        buttonInfo.valid = validationResult.valid;
+        buttonInfo.reason = validationResult.reason;
+        
+        candidates.push(buttonInfo);
+        
+        // 如果找到有效的按钮，立即返回
+        if (validationResult.valid) {
+          console.log('[AutoStudy] ✅ 在容器中找到有效播放按钮:', buttonInfo);
+          console.log('');
+          return button;
+        }
+      }
+    } catch (e) {
+      console.warn('[AutoStudy] 选择器出错:', selector, e.message);
+    }
+  }
+  
+  // 如果有候选但都无效，输出详细信息
+  if (candidates.length > 0) {
+    console.log(`[AutoStudy] ⚠️ 找到 ${candidates.length} 个候选按钮，但验证都失败了:`);
+    candidates.slice(0, 5).forEach((c, i) => {
+      console.log(`  ${i + 1}. ${c.tagName}.${c.className}`, {
+        选择器: c.selector,
+        文本: c.text,
+        原因: c.reason
+      });
+    });
+    if (candidates.length > 5) {
+      console.log(`  ... 还有 ${candidates.length - 5} 个候选`);
+    }
+  } else {
+    console.log('[AutoStudy] ❌ 使用所有选择器均未找到任何候选按钮');
+  }
+  
+  // 4. 如果上面没找到，尝试更广泛的搜索（关键词匹配）
+  console.log('[AutoStudy] 扩大搜索范围（关键词匹配）...');
+  const allButtons = container.querySelectorAll('button, div[role="button"], [onclick], a');
+  
+  let keywordMatchCount = 0;
+  const keywordCandidates = [];
+  
+  for (let button of allButtons) {
+    const text = button.textContent?.trim().toLowerCase() || '';
+    const className = (button.className || '').toLowerCase();
+    const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
+    const title = (button.getAttribute('title') || '').toLowerCase();
+    
+    // 检查是否包含播放相关的文本
+    const playKeywords = ['play', '播放', '▶', '►', 'start', '开始'];
+    let matchedKeyword = '';
+    
+    for (let keyword of playKeywords) {
+      if (text.includes(keyword) || 
+          className.includes(keyword) || 
+          ariaLabel.includes(keyword) ||
+          title.includes(keyword)) {
+        matchedKeyword = keyword;
+        break;
+      }
+    }
+    
+    if (matchedKeyword) {
+      keywordMatchCount++;
+      
+      const validationResult = isValidPlayButton(button, videoElement, true);
+      
+      const candidateInfo = {
+        element: button,
+        keyword: matchedKeyword,
+        text: text.substring(0, 30),
+        className: className.substring(0, 50),
+        valid: validationResult.valid,
+        reason: validationResult.reason
+      };
+      
+      keywordCandidates.push(candidateInfo);
+      
+      if (validationResult.valid) {
+        console.log('[AutoStudy] ✅ 通过关键词找到播放按钮:', candidateInfo);
+        console.log('');
+        return button;
+      }
+    }
+  }
+  
+  console.log(`[AutoStudy] 关键词匹配找到 ${keywordMatchCount} 个候选，但都无效`);
+  if (keywordCandidates.length > 0) {
+    keywordCandidates.slice(0, 3).forEach((c, i) => {
+      console.log(`  ${i + 1}. 关键词="${c.keyword}", 文本="${c.text}"`, {
+        className: c.className,
+        原因: c.reason
+      });
+    });
+  }
+  
+  // 5. 尝试查找覆盖在视频上的可点击元素
+  console.log('[AutoStudy] 尝试查找视频覆盖层...');
+  const rect = videoElement.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  
+  // 获取视频中心点的元素（在正确的文档中查找）
+  const elementAtCenter = searchDocument.elementFromPoint(centerX, centerY);
+  
+  if (elementAtCenter && elementAtCenter !== videoElement) {
+    console.log('[AutoStudy] 视频中心元素:', elementAtCenter.tagName, elementAtCenter.className);
+    
+    // 检查这个元素或其父元素是否可点击
+    let checkElement = elementAtCenter;
+    let depth = 0;
+    
+    while (checkElement && depth < 5) {
+      const style = searchDocument.defaultView.getComputedStyle(checkElement);
+      const isClickable = style.cursor === 'pointer' || 
+                          checkElement.onclick || 
+                          checkElement.tagName === 'BUTTON' ||
+                          checkElement.tagName === 'A';
+      
+      if (isClickable && checkElement.offsetParent !== null) {
+        console.log('[AutoStudy] ✅ 在视频中心找到可点击元素:', checkElement);
+        console.log('');
+        return checkElement;
+      }
+      
+      checkElement = checkElement.parentElement;
+      depth++;
+    }
+  }
+  
+  // 6. 如果视频在 iframe 中，尝试在主文档中查找播放按钮
+  if (isInIframe) {
+    console.log('[AutoStudy] 视频在 iframe 中，尝试在主文档中查找播放按钮...');
+    
+    // 在主文档中搜索
+    const mainPlayButtonSelectors = [
+      'button.mvp-toggle-play',
+      '.mvp-toggle-play',
+      'button[class*="play"]',
+      '.play-btn',
+      '.play-button'
+    ];
+    
+    for (let selector of mainPlayButtonSelectors) {
+      try {
+        const buttons = document.querySelectorAll(selector);
+        for (let button of buttons) {
+          if (button.offsetParent !== null) {
+            console.log('[AutoStudy] ✅ 在主文档中找到播放按钮:', selector, button);
+            console.log('');
+            return button;
+          }
+        }
+      } catch (e) {
+        // 忽略
+      }
+    }
+  }
+  
+  // 7. 终极备用方案：如果有任何候选按钮，返回第一个
+  console.log('[AutoStudy] 所有方法都失败了，检查是否有候选按钮...');
+  
+  const allCandidates = [...candidates, ...keywordCandidates];
+  if (allCandidates.length > 0) {
+    console.log(`[AutoStudy] ⚠️ 找到 ${allCandidates.length} 个候选，尝试使用第一个`);
+    const firstCandidate = allCandidates[0];
+    console.log('[AutoStudy] 🎲 尝试使用第一个候选按钮:', {
+      text: firstCandidate.text,
+      className: firstCandidate.className,
+      原因: firstCandidate.reason
+    });
+    console.log('');
+    return firstCandidate.element;
+  }
+  
+  // 8. 最后的最后：尝试直接点击视频（某些播放器支持）
+  console.log('[AutoStudy] ⚠️ 所有方法都失败，建议尝试直接点击视频元素');
+  console.log('[AutoStudy] 提示：将返回null，会回退到直接调用 video.play()');
+  console.log('');
+  console.log('=== 🔍 播放按钮查找结束 ===');
+  console.log('');
+  
+  return null;
+}
+
+// 验证播放按钮是否有效 - 增强版（支持宽松模式）
+function isValidPlayButton(button, videoElement, looseMode = false) {
+  if (!button) {
+    return { valid: false, reason: '按钮为空' };
+  }
+  
+  try {
+    // 检查元素是否可见
+    if (button.offsetParent === null) {
+      return { valid: false, reason: 'offsetParent为null（不可见）' };
+    }
+    
+    const style = window.getComputedStyle(button);
+    if (style.display === 'none') {
+      return { valid: false, reason: 'display: none' };
+    }
+    if (style.visibility === 'hidden') {
+      return { valid: false, reason: 'visibility: hidden' };
+    }
+    if (style.opacity === '0') {
+      return { valid: false, reason: 'opacity: 0' };
+    }
+    
+    // 检查按钮是否被禁用
+    if (button.disabled) {
+      return { valid: false, reason: '按钮被禁用' };
+    }
+    
+    // 获取位置信息
+    const buttonRect = button.getBoundingClientRect();
+    const videoRect = videoElement.getBoundingClientRect();
+    
+    // 特殊处理：mvp 播放器按钮（包括控制栏按钮）
+    const isMvpButton = button.classList.contains('mvp-toggle-play') || 
+                       button.classList.contains('mvp-first-btn-margin') ||
+                       button.className.includes('mvp');
+    
+    // 检查是否在 MVP 控制栏中
+    const inMvpControls = button.closest('.mvp-controls-left-area') ||
+                         button.closest('.mvp-replay-player-all-controls') ||
+                         button.closest('[class*="mvp-controls"]');
+    
+    if (isMvpButton || inMvpControls) {
+      return { valid: true, reason: 'MVP播放器按钮（特殊处理）' };
+    }
+    
+    // 特殊处理：如果按钮包含明确的播放类名
+    const hasExplicitPlayClass = button.classList.contains('play-btn') ||
+                                 button.classList.contains('play-button') ||
+                                 button.classList.contains('playButton') ||
+                                 button.classList.contains('vjs-play-control');
+    
+    if (hasExplicitPlayClass && looseMode) {
+      return { valid: true, reason: '明确的播放按钮类名（宽松模式）' };
+    }
+    
+    // 宽松模式：只要按钮在页面上的合理位置即可
+    if (looseMode) {
+      // 检查按钮是否在视口内
+      const isInViewport = buttonRect.top >= -100 && 
+                          buttonRect.bottom <= window.innerHeight + 100 &&
+                          buttonRect.left >= -100 && 
+                          buttonRect.right <= window.innerWidth + 100;
+      
+      if (isInViewport) {
+        return { valid: true, reason: '按钮在视口内（宽松模式）' };
+      } else {
+        return { valid: false, reason: '按钮不在视口内' };
+      }
+    }
+    
+    // 严格模式：检查按钮的位置是否在视频附近
+    // 大幅扩大检测范围（支持外部控制栏）
+    const horizontalOverlap = 
+      buttonRect.right > videoRect.left - 200 &&  // 左侧扩大到200px
+      buttonRect.left < videoRect.right + 200;    // 右侧扩大到200px
+    
+    const verticalNearby = 
+      buttonRect.top >= videoRect.top - 200 &&     // 上方扩大到200px
+      buttonRect.bottom <= videoRect.bottom + 200; // 下方扩大到200px
+    
+    const isNearVideo = horizontalOverlap && verticalNearby;
+    
+    if (isNearVideo) {
+      return { valid: true, reason: '按钮在视频附近' };
+    }
+    
+    // 最后：如果按钮在整个页面的可见区域，也认为可能有效
+    const isVisibleAnywhere = buttonRect.width > 0 && 
+                             buttonRect.height > 0 &&
+                             buttonRect.top < window.innerHeight &&
+                             buttonRect.bottom > 0;
+    
+    if (isVisibleAnywhere) {
+      return { valid: true, reason: '按钮可见（备用判断）' };
+    }
+    
+    return { 
+      valid: false, 
+      reason: `位置不符：水平重叠=${horizontalOverlap}, 垂直接近=${verticalNearby}` 
+    };
+    
+  } catch (e) {
+    return { valid: false, reason: '验证出错: ' + e.message };
+  }
+}
+
+// 检查所有视频是否播放完成 - 优化版（更严格的完成判断）
 function areAllVideosCompleted() {
   const videos = getVideoElements();
   
@@ -2169,10 +2797,20 @@ function areAllVideosCompleted() {
   
   videos.forEach((video, index) => {
     const isEnded = video.ended;
-    const isNearEnd = video.currentTime > 0 && video.duration > 0 && (video.currentTime >= video.duration - 2);
-    const isCompleted = isEnded || isNearEnd;
+    const hasEndedEvent = video.dataset.videoReallyEnded === 'true'; // 检查是否触发了ended事件
+    const hasDuration = video.duration > 0 && !isNaN(video.duration);
     
-    console.log(`[AutoStudy] 视频 ${index + 1}: 时长=${Math.round(video.duration)}s, 当前=${Math.round(video.currentTime)}s, 已结束=${isEnded}, 接近结束=${isNearEnd}, 已完成=${isCompleted}`);
+    // 更严格的完成判断：必须真正播放到最后0.5秒内，或者ended=true，或触发了ended事件
+    const isReallyNearEnd = hasDuration && 
+                            video.currentTime > 0 && 
+                            (video.duration - video.currentTime) <= 0.5;
+    
+    // 只有真正结束或播放到最后0.5秒或触发了ended事件才算完成
+    const isCompleted = isEnded || isReallyNearEnd || hasEndedEvent;
+    
+    const remainingTime = hasDuration ? Math.max(0, video.duration - video.currentTime) : 0;
+    
+    console.log(`[AutoStudy] 视频 ${index + 1}: 时长=${Math.round(video.duration)}s, 当前=${Math.round(video.currentTime)}s, 剩余=${remainingTime.toFixed(1)}s, ended=${isEnded}, 触发ended事件=${hasEndedEvent}, 接近结束=${isReallyNearEnd}, 已完成=${isCompleted}`);
     
     if (isCompleted) {
       completedCount++;
@@ -2185,18 +2823,27 @@ function areAllVideosCompleted() {
   return allCompleted;
 }
 
-// 开始监控视频播放
+// 开始监控视频播放 - 优化版（增加进度统计等待时间 + 模拟用户活动）
 function startVideoMonitoring() {
   if (videoCheckInterval) {
     clearInterval(videoCheckInterval);
   }
   
   isWatchingVideo = true;
+  let videoCompletedTime = 0; // 记录视频完成的时间戳
   
-  showNotification('检测到视频内容，自动静音并调整倍速...', 'info', true);
+  showNotification('检测到视频内容，等待播放器加载...', 'info', true);
   
-  // 立即处理一次视频
-  handleVideoPlayback();
+  // 启动用户活动模拟（保持页面活跃状态）
+  startUserActivitySimulation();
+  
+  // 等待播放器完全加载后再处理（特别是MVP播放器）
+  console.log('[AutoStudy] 等待2秒让播放器完全加载...');
+  setTimeout(() => {
+    showNotification('播放器已加载，开始处理视频...', 'info');
+    // 立即处理一次视频
+    handleVideoPlayback();
+  }, 2000);
   
   // 每2秒检查一次视频状态
   videoCheckInterval = setInterval(() => {
@@ -2221,6 +2868,12 @@ function startVideoMonitoring() {
           video.playbackRate = targetSpeed;
           console.log(`[AutoStudy] 持续确保视频 ${index + 1} 倍速: ${targetSpeed}x`);
         }
+        
+        // 确保视频在视口中（有些平台需要视频可见才计算进度）
+        if (!isElementInViewport(video)) {
+          video.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          console.log(`[AutoStudy] 视频 ${index + 1} 不在视口中，滚动到可见区域`);
+        }
       } catch (e) {
         // 忽略错误
       }
@@ -2231,24 +2884,68 @@ function startVideoMonitoring() {
     
     // 检查是否播放完成
     if (areAllVideosCompleted()) {
-      console.log('[AutoStudy] 所有视频播放完成');
-      stopVideoMonitoring();
+      const now = Date.now();
       
-      // 视频播放完成，直接点击下一个按钮
-      setTimeout(() => {
-        if (isRunning && !isWaitingForNextPage) {
-          console.log('[AutoStudy] 视频播放完成，尝试点击下一个按钮');
-          showNotification('视频播放完成，准备进入下一页...', 'success', true);
-          
-          // 重置状态为非视频页面，防止重复检测
-          currentPageType = 'completed';
-          
-          // 直接尝试点击下一个按钮
-          tryClickNextButton();
+      // 第一次检测到完成时记录时间
+      if (videoCompletedTime === 0) {
+        videoCompletedTime = now;
+        console.log('[AutoStudy] ✅ 视频播放完成，等待5秒让平台统计进度...');
+        showNotification('视频播放完成，等待平台统计进度...', 'success', true);
+        return; // 不立即跳转，继续监控
+      }
+      
+      // 已经完成，检查是否等待足够长时间（5秒）
+      const waitedTime = now - videoCompletedTime;
+      const requiredWaitTime = 5000; // 等待5秒让平台统计
+      
+      if (waitedTime >= requiredWaitTime) {
+        console.log(`[AutoStudy] 已等待 ${waitedTime}ms，平台应该已统计完成，准备跳转下一页`);
+        stopVideoMonitoring();
+        
+        // 视频播放完成且等待足够时间后，点击下一个按钮
+        setTimeout(() => {
+          if (isRunning && !isWaitingForNextPage) {
+            console.log('[AutoStudy] 尝试点击下一个按钮');
+            showNotification('进度已统计，准备进入下一页...', 'success', true);
+            
+            // 重置状态为非视频页面，防止重复检测
+            currentPageType = 'completed';
+            
+            // 直接尝试点击下一个按钮
+            tryClickNextButton();
+          }
+        }, 1000);
+      } else {
+        // 继续等待
+        const remainingTime = Math.ceil((requiredWaitTime - waitedTime) / 1000);
+        console.log(`[AutoStudy] 继续等待平台统计... 剩余 ${remainingTime} 秒`);
+        if (remainingTime % 2 === 0) { // 每2秒显示一次
+          showNotification(`等待平台统计进度... ${remainingTime}秒`, 'info');
         }
-      }, 2000);
+      }
+    } else {
+      // 如果检测到未完成，重置完成时间
+      if (videoCompletedTime !== 0) {
+        console.log('[AutoStudy] ⚠️ 检测到视频状态变为未完成，重置等待时间');
+        videoCompletedTime = 0;
+      }
     }
   }, 2000);
+}
+
+// 辅助函数：检查元素是否在视口中
+function isElementInViewport(el) {
+  try {
+    const rect = el.getBoundingClientRect();
+    return (
+      rect.top >= 0 &&
+      rect.left >= 0 &&
+      rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+      rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+    );
+  } catch (e) {
+    return true; // 出错时假设可见
+  }
 }
 
 // 停止监控视频播放
@@ -2258,6 +2955,104 @@ function stopVideoMonitoring() {
   if (videoCheckInterval) {
     clearInterval(videoCheckInterval);
     videoCheckInterval = null;
+  }
+  
+  // 停止用户活动模拟
+  stopUserActivitySimulation();
+}
+
+// 用户活动模拟相关变量
+let userActivityInterval = null;
+let lastMouseX = 0;
+let lastMouseY = 0;
+
+// 启动用户活动模拟（让平台认为用户在观看）
+function startUserActivitySimulation() {
+  console.log('[AutoStudy] 🎭 启动用户活动模拟');
+  
+  // 如果已经在运行，先停止
+  if (userActivityInterval) {
+    clearInterval(userActivityInterval);
+  }
+  
+  // 每10秒模拟一次用户活动
+  userActivityInterval = setInterval(() => {
+    if (!isWatchingVideo || !isRunning) {
+      stopUserActivitySimulation();
+      return;
+    }
+    
+    try {
+      // 1. 触发鼠标移动事件（小范围随机移动）
+      const videos = getVideoElements();
+      if (videos.length > 0) {
+        const video = videos[0];
+        const rect = video.getBoundingClientRect();
+        
+        // 在视频区域内随机生成坐标
+        const randomX = rect.left + Math.random() * rect.width;
+        const randomY = rect.top + Math.random() * rect.height;
+        
+        // 只有当坐标变化时才触发事件（避免完全相同）
+        if (Math.abs(randomX - lastMouseX) > 5 || Math.abs(randomY - lastMouseY) > 5) {
+          const mouseMoveEvent = new MouseEvent('mousemove', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: randomX,
+            clientY: randomY
+          });
+          
+          video.dispatchEvent(mouseMoveEvent);
+          
+          lastMouseX = randomX;
+          lastMouseY = randomY;
+          
+          console.log(`[AutoStudy] 模拟鼠标移动: (${Math.round(randomX)}, ${Math.round(randomY)})`);
+        }
+        
+        // 2. 触发visibilitychange事件（确保页面被认为是可见的）
+        if (document.hidden) {
+          console.log('[AutoStudy] ⚠️ 页面被标记为隐藏，可能影响进度统计');
+        }
+        
+        // 3. 触发focus事件（确保页面有焦点）
+        if (document.hasFocus && !document.hasFocus()) {
+          console.log('[AutoStudy] ⚠️ 页面失去焦点，尝试重新获取焦点');
+          window.focus();
+        }
+        
+        // 4. 定期检查并触发视频的自定义事件
+        videos.forEach((video, index) => {
+          if (!video.paused && !video.ended) {
+            // 触发watching事件（某些平台可能监听此事件）
+            video.dispatchEvent(new CustomEvent('watching', {
+              detail: {
+                currentTime: video.currentTime,
+                duration: video.duration,
+                timestamp: Date.now()
+              }
+            }));
+          }
+        });
+        
+      }
+      
+    } catch (error) {
+      console.warn('[AutoStudy] 用户活动模拟出错:', error);
+    }
+    
+  }, 10000); // 每10秒一次
+  
+  console.log('[AutoStudy] 用户活动模拟已启动，间隔10秒');
+}
+
+// 停止用户活动模拟
+function stopUserActivitySimulation() {
+  if (userActivityInterval) {
+    clearInterval(userActivityInterval);
+    userActivityInterval = null;
+    console.log('[AutoStudy] 用户活动模拟已停止');
   }
 }
 
@@ -3773,6 +4568,135 @@ function debugStatus() {
 // 暴露调试函数到全局（方便在控制台调用）
 window.autoStudyDebug = debugStatus;
 
+// 视频进度诊断函数 - 帮助排查为什么进度只有一半
+window.autoStudyVideoDebug = function() {
+  console.log('');
+  console.log('=== 🎥 [AutoStudy] 视频进度诊断工具 ===');
+  console.log('');
+  
+  const videos = getVideoElements();
+  
+  if (videos.length === 0) {
+    console.log('❌ 未找到视频元素');
+    return;
+  }
+  
+  console.log(`✅ 找到 ${videos.length} 个视频元素`);
+  console.log('');
+  
+  videos.forEach((video, index) => {
+    console.log(`--- 视频 ${index + 1} 详细信息 ---`);
+    
+    // 基本信息
+    console.log('📊 播放状态:', {
+      '总时长': Math.round(video.duration) + 's',
+      '当前时间': Math.round(video.currentTime) + 's',
+      '剩余时间': Math.round(video.duration - video.currentTime) + 's',
+      '播放进度': Math.round((video.currentTime / video.duration) * 100) + '%',
+      '是否暂停': video.paused,
+      '是否结束': video.ended,
+      '播放速度': video.playbackRate + 'x',
+      '是否静音': video.muted
+    });
+    
+    // 事件监听器状态
+    console.log('🎧 事件监听器:', {
+      '已添加监听': video.dataset.autoStudyListenerAdded === 'true',
+      'ended事件触发': video.dataset.videoReallyEnded === 'true'
+    });
+    
+    // 可见性检查
+    const rect = video.getBoundingClientRect();
+    const inViewport = isElementInViewport(video);
+    console.log('👁️ 可见性:', {
+      '在视口中': inViewport,
+      '位置': `top=${Math.round(rect.top)}, left=${Math.round(rect.left)}`,
+      '尺寸': `${Math.round(rect.width)}x${Math.round(rect.height)}`,
+      'offsetParent存在': video.offsetParent !== null
+    });
+    
+    // 页面焦点状态
+    console.log('🔍 页面状态:', {
+      '页面有焦点': document.hasFocus ? document.hasFocus() : '不支持检测',
+      '页面可见': !document.hidden,
+      '页面URL': window.location.href
+    });
+    
+    // 检查是否有平台特定的进度记录元素
+    const progressIndicators = [
+      document.querySelector('.progress'),
+      document.querySelector('.video-progress'),
+      document.querySelector('[class*="progress"]'),
+      document.querySelector('[data-progress]')
+    ].filter(el => el);
+    
+    console.log('📈 平台进度指示器:', progressIndicators.length > 0 ? 
+      progressIndicators.map(el => el.className || el.tagName) : 
+      '未找到明显的进度指示器');
+    
+    // 网络状态
+    console.log('🌐 网络状态:', {
+      'readyState': video.readyState + ' (' + ['空', '元数据', '当前数据', '未来数据', '足够数据'][video.readyState] + ')',
+      'networkState': video.networkState + ' (' + ['空', '闲置', '加载中', '无源'][video.networkState] + ')',
+      '已缓冲': video.buffered.length > 0 ? `${video.buffered.end(0)}s` : '0s'
+    });
+    
+    // 视频源信息
+    console.log('📹 视频源:', {
+      'src': video.src?.substring(0, 100) + '...' || '无直接src',
+      'currentSrc': video.currentSrc?.substring(0, 100) + '...' || '无',
+      'preload': video.preload
+    });
+    
+    console.log('');
+  });
+  
+  // 给出诊断建议
+  console.log('💡 诊断建议:');
+  console.log('');
+  
+  const allCompleted = areAllVideosCompleted();
+  if (allCompleted) {
+    console.log('✅ 所有视频已播放完成');
+    console.log('   如果进度还是一半，可能是以下原因:');
+    console.log('   1. 平台需要更长的等待时间来统计进度');
+    console.log('   2. 平台检测到了自动化行为（倍速、静音）');
+    console.log('   3. 平台需要特定的用户交互（如点击、拖拽进度条）');
+    console.log('   4. 平台有防作弊机制（如检测鼠标活动频率）');
+    console.log('');
+    console.log('🔧 尝试以下方法:');
+    console.log('   • 手动点击视频播放（不使用插件）观察进度');
+    console.log('   • 打开浏览器开发者工具 Network 标签，查看是否有进度上报请求');
+    console.log('   • 在视频播放时查看是否有XHR/Fetch请求发送进度数据');
+    console.log('   • 尝试降低倍速（如1.5x代替2x）');
+  } else {
+    console.log('⚠️ 视频尚未播放完成');
+    videos.forEach((video, index) => {
+      const remaining = Math.round(video.duration - video.currentTime);
+      if (remaining > 1) {
+        console.log(`   视频 ${index + 1}: 还剩 ${remaining} 秒`);
+      }
+    });
+  }
+  
+  console.log('');
+  console.log('📞 如需进一步帮助，请在控制台保持打开状态并:');
+  console.log('   1. 开启 Network 标签，筛选 XHR/Fetch');
+  console.log('   2. 手动播放视频到50%时，查看是否有进度上报');
+  console.log('   3. 播放到100%时，再次查看网络请求');
+  console.log('   4. 对比手动和自动模式的网络请求差异');
+  console.log('');
+  console.log('===========================================');
+  console.log('');
+  
+  return {
+    videoCount: videos.length,
+    allCompleted: allCompleted,
+    pageVisible: !document.hidden,
+    hasFocus: document.hasFocus ? document.hasFocus() : null
+  };
+};
+
 // 暴露快速修复函数
 window.autoStudyForceStart = function(pageType = 'text') {
   console.log('=== [AutoStudy] 手动强制启动 ===');
@@ -3871,6 +4795,359 @@ window.autoStudyTestPdfFlip = function() {
   if (!success) {
     console.log('[AutoStudy] PDF翻页模式不可用');
     showNotification('PDF翻页模式不可用，请检查控制台日志', 'warning');
+  }
+};
+
+// 播放按钮智能诊断工具 - 全新升级版
+window.autoStudyDiagnosePlayButton = function() {
+  console.log('');
+  console.log('╔═══════════════════════════════════════════════════════╗');
+  console.log('║   🔬 [AutoStudy] 播放按钮智能诊断工具 v2.0          ║');
+  console.log('╚═══════════════════════════════════════════════════════╝');
+  console.log('');
+  
+  // 第一步：检测视频
+  console.log('📋 第一步：检测视频元素');
+  console.log('─────────────────────────────────────────');
+  const videos = getVideoElements();
+  
+  if (videos.length === 0) {
+    console.log('❌ 未找到视频元素');
+    console.log('');
+    console.log('💡 建议：');
+    console.log('  1. 确保视频已加载');
+    console.log('  2. 检查视频是否在 iframe 中');
+    console.log('  3. 刷新页面后重试');
+    return;
+  }
+  
+  console.log(`✅ 找到 ${videos.length} 个视频元素`);
+  console.log('');
+  
+  // 对每个视频进行诊断
+  videos.forEach((video, index) => {
+    console.log(`━━━━━━━━━━━━ 诊断视频 ${index + 1}/${videos.length} ━━━━━━━━━━━━`);
+    console.log('');
+    
+    // 视频基本信息
+    const videoRect = video.getBoundingClientRect();
+    console.log('📹 视频信息:');
+    console.log({
+      标签: video.tagName,
+      ID: video.id || '(无)',
+      类名: video.className || '(无)',
+      位置: {
+        left: Math.round(videoRect.left),
+        top: Math.round(videoRect.top),
+        width: Math.round(videoRect.width),
+        height: Math.round(videoRect.height)
+      },
+      状态: {
+        暂停: video.paused,
+        时长: Math.round(video.duration) + 's',
+        当前: Math.round(video.currentTime) + 's'
+      }
+    });
+    console.log('');
+    
+    // 调用播放按钮查找（带详细日志）
+    console.log('🔍 第二步：查找播放按钮（将输出详细日志）');
+    console.log('─────────────────────────────────────────');
+    const playButton = findPlayButton(video);
+    
+    if (playButton) {
+      console.log('');
+      console.log('✅✅✅ 成功找到播放按钮！');
+      console.log('');
+      console.log('📍 按钮详情:');
+      const buttonRect = playButton.getBoundingClientRect();
+      console.log({
+        标签: playButton.tagName,
+        ID: playButton.id || '(无)',
+        类名: playButton.className || '(无)',
+        文本: playButton.textContent?.trim().substring(0, 50) || '(无)',
+        位置: {
+          left: Math.round(buttonRect.left),
+          top: Math.round(buttonRect.top),
+          width: Math.round(buttonRect.width),
+          height: Math.round(buttonRect.height)
+        }
+      });
+      console.log('');
+      
+      // 建议
+      console.log('💡 下一步建议:');
+      console.log('  ✓ 播放按钮查找成功');
+      console.log('  ✓ 可以启动插件进行自动学习');
+      console.log('  ✓ 插件会通过点击这个按钮来播放视频');
+      console.log('');
+      
+    } else {
+      console.log('');
+      console.log('❌❌❌ 未能找到播放按钮');
+      console.log('');
+      console.log('🔧 故障排除建议:');
+      console.log('  1. 查看上面的候选按钮列表');
+      console.log('  2. 如果有候选但验证失败，可能是位置判断问题');
+      console.log('  3. 手动在页面上找到播放按钮，右键检查元素');
+      console.log('  4. 复制播放按钮的选择器告诉我，我会添加支持');
+      console.log('');
+      console.log('📝 手动查找播放按钮方法:');
+      console.log('  在控制台运行:');
+      console.log('    document.querySelector("你的播放按钮选择器")');
+      console.log('');
+      console.log('  常见选择器示例:');
+      console.log('    button.play-btn');
+      console.log('    .video-play-button');
+      console.log('    button[aria-label="播放"]');
+      console.log('');
+    }
+  });
+  
+  console.log('╔═══════════════════════════════════════════════════════╗');
+  console.log('║   📊 诊断完成                                         ║');
+  console.log('╚═══════════════════════════════════════════════════════╝');
+  console.log('');
+  
+  return {
+    videoCount: videos.length,
+    hasPlayButton: videos.some(v => findPlayButton(v) !== null)
+  };
+};
+
+// 兼容旧的测试函数
+window.autoStudyTestPlayButton = function() {
+  console.log('');
+  console.log('=== 🎬 [AutoStudy] 播放按钮查找测试（支持iframe）===');
+  console.log('提示: 推荐使用新的诊断工具 autoStudyDiagnosePlayButton()');
+  console.log('');
+  
+  // 先检测 iframe
+  const iframes = document.querySelectorAll('iframe');
+  console.log(`📺 检测到 ${iframes.length} 个 iframe`);
+  
+  if (iframes.length > 0) {
+    iframes.forEach((iframe, idx) => {
+      console.log(`  iframe ${idx + 1}:`, {
+        src: iframe.src?.substring(0, 80) || '(无src)',
+        width: iframe.width || iframe.offsetWidth,
+        height: iframe.height || iframe.offsetHeight
+      });
+      
+      // 尝试访问 iframe 内容
+      try {
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (iframeDoc) {
+          const iframeVideos = iframeDoc.querySelectorAll('video');
+          console.log(`    └─ 包含 ${iframeVideos.length} 个视频元素`);
+        } else {
+          console.log(`    └─ 无法访问（可能跨域）`);
+        }
+      } catch (e) {
+        console.log(`    └─ 访问失败: ${e.message}`);
+      }
+    });
+    console.log('');
+  }
+  
+  const videos = getVideoElements();
+  
+  if (videos.length === 0) {
+    console.log('❌ 未找到视频元素');
+    console.log('');
+    console.log('💡 可能的原因:');
+    console.log('  1. 视频在跨域的 iframe 中');
+    console.log('  2. 视频还未加载');
+    console.log('  3. 页面没有视频');
+    return;
+  }
+  
+  console.log(`✅ 找到 ${videos.length} 个视频元素`);
+  console.log('');
+  
+  videos.forEach((video, index) => {
+    console.log(`--- 测试视频 ${index + 1} ---`);
+    
+    const videoRect = video.getBoundingClientRect();
+    console.log('📺 视频位置:', {
+      left: Math.round(videoRect.left),
+      top: Math.round(videoRect.top),
+      width: Math.round(videoRect.width),
+      height: Math.round(videoRect.height)
+    });
+    
+    // 查找播放按钮
+    console.log('🔍 开始查找播放按钮...');
+    const playButton = findPlayButton(video);
+    
+    if (playButton) {
+      const buttonRect = playButton.getBoundingClientRect();
+      console.log('✅ 找到播放按钮!', {
+        tagName: playButton.tagName,
+        className: playButton.className || '(无)',
+        id: playButton.id || '(无)',
+        text: playButton.textContent?.trim().substring(0, 20) || '(无文本)',
+        位置: {
+          left: Math.round(buttonRect.left),
+          top: Math.round(buttonRect.top),
+          width: Math.round(buttonRect.width),
+          height: Math.round(buttonRect.height)
+        }
+      });
+      
+      console.log('');
+      console.log('🧪 测试点击...');
+      
+      // 模拟点击测试
+      try {
+        playButton.click();
+        console.log('✅ 点击成功！');
+        
+        // 检查视频是否开始播放
+        setTimeout(() => {
+          if (!video.paused) {
+            console.log('✅ 视频已开始播放');
+            console.log('📊 当前状态:', {
+              paused: video.paused,
+              currentTime: video.currentTime,
+              playbackRate: video.playbackRate,
+              muted: video.muted
+            });
+            
+            // 暂停视频（避免影响测试）
+            video.pause();
+            console.log('⏸️ 已暂停视频（测试完成）');
+          } else {
+            console.log('⚠️ 视频未开始播放，可能需要更多等待时间或有其他限制');
+          }
+        }, 1000);
+        
+      } catch (error) {
+        console.error('❌ 点击失败:', error);
+      }
+      
+    } else {
+      console.log('❌ 未找到播放按钮');
+      console.log('');
+      console.log('💡 尝试手动查找:');
+      console.log('   1. 在控制台运行: document.querySelector("你的播放按钮选择器")');
+      console.log('   2. 找到后告诉我选择器，我会添加到代码中');
+    }
+    
+    console.log('');
+  });
+  
+  console.log('=== 测试完成 ===');
+  console.log('');
+};
+
+// 网络请求监控 - 帮助诊断进度上报
+window.autoStudyMonitorNetwork = function(enable = true) {
+  if (enable) {
+    console.log('');
+    console.log('=== 🌐 [AutoStudy] 启动网络请求监控 ===');
+    console.log('正在监控所有XHR和Fetch请求...');
+    console.log('');
+    
+    // 拦截XMLHttpRequest
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+    
+    XMLHttpRequest.prototype.open = function(method, url, ...args) {
+      this._autoStudyMethod = method;
+      this._autoStudyUrl = url;
+      return originalXHROpen.apply(this, [method, url, ...args]);
+    };
+    
+    XMLHttpRequest.prototype.send = function(body) {
+      const url = this._autoStudyUrl;
+      const method = this._autoStudyMethod;
+      
+      // 只记录可能与进度相关的请求
+      if (url && (
+        url.includes('progress') ||
+        url.includes('record') ||
+        url.includes('learn') ||
+        url.includes('study') ||
+        url.includes('video') ||
+        url.includes('watch') ||
+        url.includes('log') ||
+        url.includes('stat')
+      )) {
+        console.log('📡 [XHR]', method, url);
+        if (body) {
+          try {
+            const bodyData = typeof body === 'string' ? JSON.parse(body) : body;
+            console.log('   📦 请求数据:', bodyData);
+          } catch (e) {
+            console.log('   📦 请求数据:', body?.toString().substring(0, 200));
+          }
+        }
+        
+        this.addEventListener('load', function() {
+          console.log('   ✅ 响应状态:', this.status);
+          try {
+            const response = JSON.parse(this.responseText);
+            console.log('   📥 响应数据:', response);
+          } catch (e) {
+            console.log('   📥 响应:', this.responseText?.substring(0, 200));
+          }
+        });
+      }
+      
+      return originalXHRSend.apply(this, arguments);
+    };
+    
+    // 拦截Fetch
+    const originalFetch = window.fetch;
+    window.fetch = function(url, options = {}) {
+      const urlStr = typeof url === 'string' ? url : url.url;
+      
+      // 只记录可能与进度相关的请求
+      if (urlStr && (
+        urlStr.includes('progress') ||
+        urlStr.includes('record') ||
+        urlStr.includes('learn') ||
+        urlStr.includes('study') ||
+        urlStr.includes('video') ||
+        urlStr.includes('watch') ||
+        urlStr.includes('log') ||
+        urlStr.includes('stat')
+      )) {
+        console.log('📡 [Fetch]', options.method || 'GET', urlStr);
+        if (options.body) {
+          try {
+            const bodyData = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+            console.log('   📦 请求数据:', bodyData);
+          } catch (e) {
+            console.log('   📦 请求数据:', options.body?.toString().substring(0, 200));
+          }
+        }
+        
+        return originalFetch.apply(this, arguments).then(response => {
+          response.clone().text().then(text => {
+            console.log('   ✅ 响应状态:', response.status);
+            try {
+              const data = JSON.parse(text);
+              console.log('   📥 响应数据:', data);
+            } catch (e) {
+              console.log('   📥 响应:', text.substring(0, 200));
+            }
+          });
+          return response;
+        });
+      }
+      
+      return originalFetch.apply(this, arguments);
+    };
+    
+    window._autoStudyNetworkMonitorEnabled = true;
+    console.log('✅ 网络监控已启动');
+    console.log('提示: 现在播放视频，观察控制台输出的进度上报请求');
+    console.log('');
+    
+  } else {
+    console.log('⚠️ 网络监控停止功能暂不支持（需要刷新页面重置）');
   }
 };
 
@@ -3982,15 +5259,38 @@ window.autoStudyManualScrollTest = function() {
 
 // 页面加载时初始化
 loadConfig();
-console.log('[AutoStudy] v2.9 已加载 - PDF翻页优化版');
+console.log('[AutoStudy] v3.6 已加载 - MVP播放器等待优化版 🎯');
 console.log('[AutoStudy] 当前页面:', window.location.href);
 console.log('');
-console.log('📖 新功能: PDF自动翻页模式（更稳定、无滚动错误）');
+console.log('✨ v3.6 核心优化:');
+console.log('  🎯 添加播放器加载等待机制 ⭐ 新增');
+console.log('  🎯 启动时自动等待2秒让播放器就绪 ⭐ 新增');
+console.log('  🎯 MVP播放器专属等待检测 ⭐ 新增');
+console.log('  🎯 支持动态ID的播放器 ✅');
+console.log('  ✅ 已验证 MVP 播放器按钮查找');
+console.log('  ✅ 点击播放按钮触发平台进度统计');
+console.log('  ✅ 自动设置倍速和静音');
+console.log('  ✅ 视频播放到最后0.5秒');
+console.log('  ✅ 完成后等待5秒统计进度');
+console.log('');
+console.log('🎬 已验证的播放器:');
+console.log('  • 开放大学 MVP 播放器 ✅ 用户实测');
+console.log('  • Video.js');
+console.log('  • 阿里云播放器');
+console.log('  • B站播放器');
+console.log('  • 通用 HTML5 播放器');
 console.log('');
 console.log('🛠️ 调试函数:');
-console.log('  autoStudyDebug() - 查看状态');
-console.log('  autoStudyTestPdfFlip() - 测试PDF翻页');
-console.log('  autoStudyTestFileScroll() - 测试滚动（备用）');
+console.log('  autoStudyTestMvpButton() - 快速测试MVP按钮 ⭐推荐');
+console.log('  autoStudyDiagnosePlayButton() - 完整诊断');
+console.log('  autoStudyDebug() - 查看整体状态');
+console.log('');
+console.log('💡 使用方法:');
+console.log('  1. 等待页面完全加载（看到视频播放器）');
+console.log('  2. 点击插件图标启动');
+console.log('  3. 插件会自动等待2秒，然后查找播放按钮');
+console.log('  4. 观察控制台确认"✅ 找到播放按钮"');
+console.log('  5. 如果看到"通过点击按钮开始播放"即为成功！');
 console.log('');
 
 // 延迟执行页面类型检测，用于调试
@@ -4023,4 +5323,88 @@ document.addEventListener('keydown', (e) => {
     showNotification(isRunning ? '已启动自动学习' : '已停止自动学习', 'info');
   }
 });
+
+// 快速测试 MVP 播放器按钮 - 用户专用
+window.autoStudyTestMvpButton = function() {
+  console.log('');
+  console.log('╔═══════════════════════════════════════════════════════╗');
+  console.log('║   🎯 [AutoStudy] 测试 MVP 播放器按钮                 ║');
+  console.log('╚═══════════════════════════════════════════════════════╝');
+  console.log('');
+  
+  // 尝试所有 MVP 选择器
+  const mvpSelectors = [
+    '.mvp-controls-left-area button',
+    '.mvp-replay-player-all-controls button:first-child',
+    '.mvp-controls-left-area > button',
+    '.mvp-controls-left-area button:first-child'
+  ];
+  
+  console.log('尝试', mvpSelectors.length, '个 MVP 选择器...');
+  console.log('');
+  
+  let found = false;
+  
+  for (let selector of mvpSelectors) {
+    const button = document.querySelector(selector);
+    
+    if (button) {
+      console.log('✅ 找到按钮:', selector);
+      console.log({
+        标签: button.tagName,
+        类名: button.className || '(无)',
+        文本: button.textContent?.trim().substring(0, 30) || '(无)',
+        可见: button.offsetParent !== null
+      });
+      console.log('');
+      
+      if (!found) {
+        console.log('🧪 测试点击...');
+        try {
+          button.click();
+          console.log('✅ 点击成功！');
+          
+          setTimeout(() => {
+            const videos = document.querySelectorAll('video');
+            if (videos.length > 0 && !videos[0].paused) {
+              console.log('');
+              console.log('✅✅✅ 视频已开始播放！');
+              console.log('');
+              console.log('🎉🎉🎉 成功找到正确的播放按钮！');
+              console.log('');
+              console.log('📝 使用的选择器:', selector);
+              console.log('');
+              console.log('💡 现在可以启动插件，插件会自动使用这个按钮！');
+              console.log('');
+              
+              // 暂停视频
+              videos[0].pause();
+              console.log('⏸️ 已暂停视频（等待插件启动）');
+              console.log('');
+            } else {
+              console.log('⚠️ 点击后视频未播放');
+            }
+          }, 1000);
+          
+          found = true;
+        } catch (error) {
+          console.error('❌ 点击失败:', error);
+        }
+      }
+    } else {
+      console.log('❌ 未找到:', selector);
+    }
+  }
+  
+  if (!found) {
+    console.log('');
+    console.log('⚠️ 所有选择器都失败了');
+    console.log('');
+    console.log('💡 建议:');
+    console.log('  1. 确保视频页面已完全加载');
+    console.log('  2. 运行 autoStudyDiagnosePlayButton() 获取详细诊断');
+    console.log('  3. 手动点击播放按钮，看视频是否能正常播放');
+    console.log('');
+  }
+};
 
